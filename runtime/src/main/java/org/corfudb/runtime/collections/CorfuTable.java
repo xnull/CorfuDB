@@ -159,9 +159,9 @@ public class CorfuTable<K ,V, F extends Enum<F> & CorfuTable.IndexSpecification,
 
     /** Generate a table with the given set of indexes. */
     public CorfuTable(Class<F> indexFunctionEnumClass) {
-        indexerClass = indexFunctionEnumClass;
-        indexFunctions.addAll(EnumSet.allOf(indexFunctionEnumClass));
-        indexFunctions.forEach(f -> indexMap.put(f, ArrayListMultimap.create()));
+       // indexerClass = indexFunctionEnumClass;
+       //  indexFunctions.addAll(EnumSet.allOf(indexFunctionEnumClass));
+       // indexFunctions.forEach(f -> indexMap.put(f, ArrayListMultimap.create()));
     }
 
     /** Default constructor. Generates a table without any secondary indexes. */
