@@ -8,6 +8,7 @@ import org.corfudb.runtime.exceptions.AbortCause;
 import org.corfudb.runtime.exceptions.NetworkException;
 import org.corfudb.runtime.exceptions.StaleTokenException;
 import org.corfudb.runtime.exceptions.TransactionAbortedException;
+import org.corfudb.runtime.view.Layout;
 import org.corfudb.util.CFUtils;
 import org.corfudb.runtime.collections.SMRMap;
 import org.junit.Before;
@@ -649,6 +650,54 @@ public class ServerRestartIT extends AbstractIT {
 
         assertThat(shutdownCorfuServer(corfuServerProcess)).isTrue();
 
+    }
+
+
+    /**
+     * Creates a message of specified size in bytes.
+     *
+     * @param msgSize
+     * @return
+     */
+    private static String createStringOfSize(int msgSize) {
+        StringBuilder sb = new StringBuilder(msgSize);
+        for (int i = 0; i < msgSize; i++) {
+            sb.append('a');
+        }
+        return sb.toString();
+    }
+
+    @Test
+    public void oomTest() throws Exception {
+
+        final int PORT_0 = 9000;
+
+        Process corfuServer_1 = new CorfuServerRunner()
+                .setHost(corfuSingleNodeHost)
+                .setPort(PORT_0)
+                .setLogPath(getCorfuServerLogPath(corfuSingleNodeHost, PORT_0))
+                .setSingle(true)
+                .runServer();
+
+        CorfuRuntime runtime = new CorfuRuntime("localhost:9000").setCacheDisabled(true).connect();
+
+        Map<String, String> map = runtime.getObjectsView()
+                .build()
+                .setStreamName("test")
+                .setType(SMRMap.class)
+                .open();
+
+        final String data = createStringOfSize(20_000);
+
+        final int num = 300_000;
+
+        Random r = getRandomNumberGenerator();
+        for (int i = 0; i < num; i++) {
+            String key = Long.toString(r.nextLong());
+            map.put(key, data);
+        }
+
+        shutdownCorfuServer(corfuServer_1);
     }
 }
 
