@@ -81,9 +81,4 @@ public interface StreamLog {
      * @param address  address to release
      */
     void release(long address, LogData entry);
-
-    /**
-     * Clears all data and resets all segment handlers.
-     */
-    void reset();
 }
