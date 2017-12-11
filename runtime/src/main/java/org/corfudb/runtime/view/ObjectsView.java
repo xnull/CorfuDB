@@ -1,7 +1,5 @@
 package org.corfudb.runtime.view;
 
-import com.sun.xml.internal.bind.v2.TODO;
-
 import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
@@ -28,6 +26,8 @@ import org.corfudb.runtime.object.transactions.TransactionType;
 import org.corfudb.runtime.object.transactions.TransactionalContext;
 import org.corfudb.runtime.view.stream.IStreamView;
 import org.corfudb.util.serializer.Serializers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A view of the objects inside a Corfu instance.
@@ -35,6 +35,7 @@ import org.corfudb.util.serializer.Serializers;
  */
 @Slf4j
 public class ObjectsView extends AbstractView {
+    public static final Logger tracerLog = LoggerFactory.getLogger("tracer");
 
     /**
      * The Transaction stream is used to log/write successful transactions from different clients.
@@ -118,6 +119,8 @@ public class ObjectsView extends AbstractView {
             log.trace("Inheriting parent's transaction type {}", type);
         }
 
+        tracerLog.error("TXBegin | Type = {}", type);
+
         TXBuild()
                 .setType(type)
                 .begin();
@@ -145,6 +148,7 @@ public class ObjectsView extends AbstractView {
         } else {
             TxResolutionInfo txInfo = new TxResolutionInfo(
                     context.getTransactionID(), context.getSnapshotTimestamp());
+            tracerLog.error("TXAbort | TXid = {}", txInfo.getTXid());
             context.abortTransaction(new TransactionAbortedException(
                     txInfo, null, AbortCause.USER, context));
             TransactionalContext.removeContext();
@@ -181,6 +185,7 @@ public class ObjectsView extends AbstractView {
             log.trace("TXCommit[{}] time={} ms",
                     context, totalTime);
             try {
+                tracerLog.error("TXCommit | TXid = {}", context.getTransactionID());
                 return TransactionalContext.getCurrentContext().commitTransaction();
             } catch (TransactionAbortedException e) {
                 log.warn("TXCommit[{}] Exception {}", context, e);
