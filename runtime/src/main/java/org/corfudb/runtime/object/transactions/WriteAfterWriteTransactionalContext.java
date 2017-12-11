@@ -32,7 +32,9 @@ public class WriteAfterWriteTransactionalContext
     public long commitTransaction() throws TransactionAbortedException {
         log.debug("TX[{}] request write-write commit", this);
 
-        return getConflictSetAndCommit(getWriteSetInfo());
+        long committedAddress = getConflictSetAndCommit(getWriteSetInfo());
+        log.info("TX[{}] committed address : {}", this, committedAddress);
+        return committedAddress;
     }
 
     @Override

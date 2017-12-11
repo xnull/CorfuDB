@@ -242,7 +242,10 @@ public class OptimisticTransactionalContext extends AbstractTransactionalContext
     public long commitTransaction() throws TransactionAbortedException {
         log.debug("TX[{}] request optimistic commit", this);
 
-        return getConflictSetAndCommit(getReadSetInfo());
+        long committedAddress = getConflictSetAndCommit(getReadSetInfo());
+        log.info("TX[{}] committed address : {}", this, committedAddress);
+        return committedAddress;
+
     }
 
     /**
@@ -404,7 +407,7 @@ public class OptimisticTransactionalContext extends AbstractTransactionalContext
             long currentTail = builder.runtime
                     .getSequencerView().nextToken(Collections.emptySet(),
                             0).getToken().getTokenValue();
-            log.trace("SnapshotTimestamp[{}] {}", this, currentTail);
+            log.info("SnapshotTimestamp[{}] {}", this, currentTail);
             return currentTail;
         }
     }

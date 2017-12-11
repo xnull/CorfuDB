@@ -6,6 +6,7 @@ import java.util.Set;
 
 import lombok.Getter;
 
+import lombok.extern.slf4j.Slf4j;
 import org.corfudb.protocols.logprotocol.SMREntry;
 import org.corfudb.protocols.wireprotocol.TxResolutionInfo;
 import org.corfudb.runtime.exceptions.AbortCause;
@@ -23,6 +24,7 @@ import org.corfudb.runtime.object.ICorfuSMRProxyInternal;
  *
  * <p>Created by mwei on 11/22/16.
  */
+@Slf4j
 public class SnapshotTransactionalContext extends AbstractTransactionalContext {
 
     /** In a snapshot transaction, no proxies are ever modified.
@@ -91,6 +93,7 @@ public class SnapshotTransactionalContext extends AbstractTransactionalContext {
 
     @Override
     public long obtainSnapshotTimestamp() {
+        log.info("SnapshotTimestamp[{}] {}", this, getBuilder().getSnapshot());
         return getBuilder().getSnapshot();
     }
 
