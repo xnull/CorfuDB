@@ -49,6 +49,22 @@ public class BatchWriter<K, V> implements CacheWriter<K, V>, AutoCloseable {
         writerService.submit(this::batchWriteProcessor);
     }
 
+    /** Queue a write asynchronously to the {@link BatchWriter}, returning a
+     *  {@link CompletableFuture} which is completed by the {@link BatchWriter#writerService} when
+     *  the write is sync'd to disk.
+     *
+     * @param key       The key to insert.
+     * @param value     The value to insert.
+     * @return          A {@link CompletableFuture} which is completed when the write
+     *                  is sync'd to disk.
+     */
+    public CompletableFuture<Void> writeAsync(@Nonnull K key, @Nonnull V value) {
+        CompletableFuture<Void> cf = new CompletableFuture<>();
+        operationsQueue.add(new BatchWriterOperation(BatchWriterOperation.Type.WRITE,
+            (Long) key, (LogData) value, null, cf));
+        return cf;
+    }
+
     @Override
     public void write(@Nonnull K key, @Nonnull V value) {
         try {

@@ -12,11 +12,13 @@ import io.netty.channel.ChannelHandlerContext;
 import java.lang.invoke.MethodHandles;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import javax.annotation.Nonnull;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -125,14 +127,13 @@ public class LogUnitServer extends AbstractServer {
             streamLog = new StreamLogFiles(serverContext, (Boolean) opts.get("--no-verify"));
         }
 
-        batchWriter = new BatchWriter(streamLog);
+        batchWriter = new BatchWriter<>(streamLog);
 
         dataCache = Caffeine.<Long, ILogData>newBuilder()
                 .<Long, ILogData>weigher((k, v) -> ((LogData) v).getData() == null ? 1 : (
                         (LogData) v).getData().length)
                 .maximumWeight(maxCacheSize)
                 .removalListener(this::handleEviction)
-                .writer(batchWriter)
                 .build(this::handleRetrieval);
 
         MetricRegistry metrics = serverContext.getMetrics();
@@ -165,21 +166,19 @@ public class LogUnitServer extends AbstractServer {
     @ServerHandler(type = CorfuMsgType.WRITE, opTimer = metricsPrefix + "write")
     public void write(CorfuPayloadMsg<WriteRequest> msg, ChannelHandlerContext ctx, IServerRouter r,
                       boolean isMetricsEnabled) {
-        log.debug("log write: global: {}, streams: {}, backpointers: {}", msg
-                .getPayload().getGlobalAddress(), msg.getPayload().getData().getBackpointerMap());
 
-        try {
-            dataCache.put(msg.getPayload().getGlobalAddress(), msg.getPayload().getData());
-            r.sendResponse(ctx, msg, CorfuMsgType.WRITE_OK.msg());
+        final Long address = msg.getPayload().getGlobalAddress();
+        final ILogData data = msg.getPayload().getData();
 
-        } catch (OverwriteException ex) {
-            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_OVERWRITE.msg());
-        } catch (DataOutrankedException e) {
-            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_DATA_OUTRANKED.msg());
-        } catch (ValueAdoptedException e) {
-            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_VALUE_ADOPTED.payloadMsg(e
-                    .getReadResponse()));
-        }
+        log.trace("write[{}]: backpointers: {}", address, data.getBackpointerMap());
+
+        CompletableFuture<Void> future = batchWriter.writeAsync(address, data);
+                handleExceptions(future, ctx, msg, r);
+                // The following runs on the batchWriter thread
+                future.thenRun(() -> {
+                    dataCache.put(address, data);
+                    r.sendResponse(ctx, msg, CorfuMsgType.WRITE_OK.msg());
+                });
     }
 
     @ServerHandler(type = CorfuMsgType.READ_REQUEST, opTimer = metricsPrefix + "read")
@@ -228,20 +227,14 @@ public class LogUnitServer extends AbstractServer {
     private void fillHole(CorfuPayloadMsg<TrimRequest> msg, ChannelHandlerContext ctx,
                           IServerRouter r,
                           boolean isMetricsEnabled) {
-        try {
-            long address = msg.getPayload().getAddress();
+        final Long address = msg.getPayload().getAddress();
+        CompletableFuture<Void> future = batchWriter.writeAsync(address, LogData.getHole(address));
+        handleExceptions(future, ctx, msg, r);
+        // The following runs on the batchWriter thread
+        future.thenRun(() -> {
             dataCache.put(address, LogData.getHole(address));
             r.sendResponse(ctx, msg, CorfuMsgType.WRITE_OK.msg());
-
-        } catch (OverwriteException e) {
-            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_OVERWRITE.msg());
-        } catch (DataOutrankedException e) {
-            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_DATA_OUTRANKED.msg());
-        } catch (ValueAdoptedException e) {
-
-            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_VALUE_ADOPTED.payloadMsg(e
-                    .getReadResponse()));
-        }
+        });
     }
 
     @ServerHandler(type = CorfuMsgType.TRIM, opTimer = metricsPrefix + "fill-hole")
@@ -343,6 +336,35 @@ public class LogUnitServer extends AbstractServer {
         compactor.cancel(true);
         scheduler.shutdownNow();
         batchWriter.close();
+    }
+
+
+    /** Handle an exception that occurs during the completion, returning a message to the client.
+     *
+     * @param cf        The {@link CompletableFuture} which throws an exception.
+     * @param ctx       The {@link ChannelHandlerContext} the message came in on.
+     * @param msg       The {@link CorfuMsg} which caused the exception.
+     * @param r         The {@link IServerRouter} to return the message on.
+     */
+    private void handleExceptions(@Nonnull CompletableFuture<?> cf,
+        @Nonnull ChannelHandlerContext ctx,
+        @Nonnull CorfuMsg msg,
+        @Nonnull IServerRouter r) {
+        cf.exceptionally(e -> {
+            if (e instanceof OverwriteException) {
+                r.sendResponse(ctx, msg, CorfuMsgType.ERROR_OVERWRITE.msg());
+            } else if (e instanceof DataOutrankedException) {
+                r.sendResponse(ctx, msg, CorfuMsgType.ERROR_DATA_OUTRANKED.msg());
+            } else if (e instanceof ValueAdoptedException) {
+                r.sendResponse(ctx, msg, CorfuMsgType.ERROR_VALUE_ADOPTED.payloadMsg(
+                    ((ValueAdoptedException) e).getReadResponse()));
+            } else {
+                r.sendResponse(ctx, msg, CorfuMsgType.ERROR_SERVER_EXCEPTION.payloadMsg(e));
+                log.error("handleExceptions: Unexpected exception during {}",
+                    msg.getMsgType(), e);
+            }
+            return null;
+        });
     }
 
     @VisibleForTesting
