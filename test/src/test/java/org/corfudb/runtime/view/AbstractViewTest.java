@@ -24,6 +24,7 @@ import org.corfudb.runtime.clients.ManagementClient;
 import org.corfudb.runtime.clients.SequencerClient;
 import org.corfudb.runtime.clients.TestClientRouter;
 import org.corfudb.runtime.clients.TestRule;
+import org.corfudb.util.NodeLocator;
 import org.junit.After;
 import org.junit.Before;
 
@@ -94,19 +95,23 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
      * @return
      */
     protected IClientRouter getRouterFunction(CorfuRuntime runtime, String endpoint) {
+        final NodeLocator locator = NodeLocator.parseString(endpoint);
         runtimeRouterMap.putIfAbsent(runtime, new ConcurrentHashMap<>());
-        if (!endpoint.startsWith("test:")) {
+        if (!locator.getHost().equals("test")) {
             throw new RuntimeException("Unsupported endpoint in test: " + endpoint);
         }
-        return runtimeRouterMap.get(runtime).computeIfAbsent(endpoint,
+        String legacyEndpoint = locator.getHost() + ":" + locator.getPort();
+        return runtimeRouterMap.get(runtime).computeIfAbsent(legacyEndpoint,
                 x -> {
                     TestClientRouter tcn =
-                            new TestClientRouter(testServerMap.get(endpoint).getServerRouter());
+                            new TestClientRouter(testServerMap
+                                .get(legacyEndpoint).getServerRouter());
                     tcn.addClient(new BaseClient())
                             .addClient(new SequencerClient())
                             .addClient(new LayoutClient())
                             .addClient(new LogUnitClient())
                             .addClient(new ManagementClient());
+                    runtime.nodeRouters.put(endpoint, tcn);
                     return tcn;
                 }
         );

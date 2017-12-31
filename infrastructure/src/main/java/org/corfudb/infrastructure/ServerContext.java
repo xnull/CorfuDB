@@ -22,6 +22,8 @@ import org.corfudb.runtime.view.IFailureHandlerPolicy;
 import org.corfudb.runtime.view.Layout;
 import org.corfudb.runtime.view.Layout.LayoutSegment;
 import org.corfudb.util.MetricsUtils;
+import org.corfudb.util.NodeLocator;
+import org.corfudb.util.NodeLocator.Protocol;
 import org.corfudb.util.UuidUtils;
 
 import static org.corfudb.util.MetricsUtils.isMetricsReportingSetUp;
@@ -195,24 +197,36 @@ public class ServerContext {
         }
         log.info("getNewSingleNodeLayout: Bootstrapping with cluster Id {} [{}]",
             clusterId, UuidUtils.asBase64(clusterId));
-        String localAddress = getServerConfig().get("--address") + ":"
-            + getServerConfig().get("<port>");
+
         return new Layout(
-            Collections.singletonList(localAddress),
-            Collections.singletonList(localAddress),
+            Collections.singletonList(getLocalEndpoint().toString()),
+            Collections.singletonList(getLocalEndpoint().toString()),
             Collections.singletonList(new LayoutSegment(
                 Layout.ReplicationMode.CHAIN_REPLICATION,
                 0L,
                 -1L,
                 Collections.singletonList(
                     new Layout.LayoutStripe(
-                        Collections.singletonList(localAddress)
+                        Collections.singletonList(getLocalEndpoint().toString())
                     )
                 )
             )),
             0L,
             clusterId
         );
+    }
+
+    /** Get the {@link NodeLocator} for the local endpoint.
+     *
+     * @return  The {@link NodeLocator} for this endpoint.
+     */
+    public NodeLocator getLocalEndpoint() {
+        return NodeLocator.builder()
+            .host(getServerConfig(String.class, "--address"))
+            .port(Integer.parseInt(getServerConfig(String.class, "<port>")))
+            .nodeId(getNodeId())
+            .protocol(Protocol.TCP)
+            .build();
     }
 
     /** Get the current {@link Layout} stored in the {@link DataStore}.

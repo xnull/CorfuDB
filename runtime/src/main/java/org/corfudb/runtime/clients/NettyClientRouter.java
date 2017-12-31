@@ -449,7 +449,7 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
                     } catch (Exception ex) {
 //                        MetricsUtils.incConditionalCounter(isEnabled,
 //                                counterConnectFailed, 1);
-                        log.warn("Exception while reconnecting, retry in {} ms", timeoutRetry);
+                        log.warn("Exception while reconnecting, retry in {} ms", timeoutRetry, ex);
                         Sleep.MILLISECONDS.sleepUninterruptibly(timeoutRetry);
                     }
                 }

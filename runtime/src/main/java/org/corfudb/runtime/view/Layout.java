@@ -39,6 +39,7 @@ import org.corfudb.runtime.view.replication.QuorumReplicationProtocol;
 import org.corfudb.runtime.view.replication.ReadWaitHoleFillPolicy;
 import org.corfudb.runtime.view.stream.BackpointerStreamView;
 import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.util.NodeLocator;
 
 /**
  * This class represents the layout of a Corfu instance.
@@ -351,6 +352,22 @@ public class Layout {
     @SuppressWarnings({"checkstyle:abbreviation"})
     public String asJSONString() {
         return parser.toJson(this);
+    }
+
+    public boolean containsUnresponsiveServer(@Nonnull NodeLocator locator) {
+        return  getUnresponsiveServers().stream()
+                            // Full locator string
+                            .anyMatch(s -> locator.toString().equals(s)
+                            // Legacy locator string
+                            || s.equals(locator.toLegacyString()));
+    }
+
+    public boolean containsServer(@Nonnull NodeLocator locator) {
+        return getAllServers().stream()
+                            // Full locator string
+            .anyMatch(s -> locator.toString().equals(s)
+                            // Legacy locator string
+                            || s.equals(locator.toLegacyString()));
     }
 
     /**

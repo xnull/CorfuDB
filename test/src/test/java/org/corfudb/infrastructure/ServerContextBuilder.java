@@ -77,7 +77,7 @@ public class ServerContextBuilder {
                  .put("--enable-sasl-plain-text-auth", saslPlainTextAuth)
                  .put("--cluster-id", clusterId)
                  .put("--implementation", implementation)
-                 .put("<port>", port);
+                 .put("<port>", Integer.toString(port));
         ServerContext sc = new ServerContext(builder.build());
         sc.setServerRouter(serverRouter);
         return sc;

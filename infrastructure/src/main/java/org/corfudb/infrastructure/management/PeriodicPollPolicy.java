@@ -67,7 +67,7 @@ public class PeriodicPollPolicy implements IFailureDetectorPolicy {
 
         String[] allServers = layout.getAllServers().stream().toArray(String[]::new);
         // Performs setup and checks for changes in the layout to update failure count
-        checkForChanges(allServers, corfuRuntime);
+        checkForChanges(allServers, corfuRuntime, layout.getEpoch());
         // Perform polling of all servers in historyServers
         pollOnce();
 
@@ -79,8 +79,9 @@ public class PeriodicPollPolicy implements IFailureDetectorPolicy {
      *
      * @param allServers   List of all servers in teh layout
      * @param corfuRuntime A connected corfu runtime
+     * @param epoch        The epoch each router should be in
      */
-    private void checkForChanges(String[] allServers, CorfuRuntime corfuRuntime) {
+    private void checkForChanges(String[] allServers, CorfuRuntime corfuRuntime, long epoch) {
 
         Arrays.sort(allServers);
 
@@ -97,12 +98,14 @@ public class PeriodicPollPolicy implements IFailureDetectorPolicy {
             historyNodeEpoch = new ConcurrentHashMap<>();
             historyPollEpochExceptions = new long[allServers.length];
             pollCompletableFutures = new CompletableFuture[allServers.length];
+
             for (int i = 0; i < allServers.length; i++) {
                 if (!historyStatus.containsKey(allServers[i])) {
                     historyStatus.put(allServers[i], true);  // Assume it's up until we think it
                     // isn't.
                 }
                 historyRouters[i] = corfuRuntime.getRouterFunction.apply(allServers[i]);
+                historyRouters[i].setEpoch(epoch);
                 historyPollFailures[i] = 0;
                 historyPollEpochExceptions[i] = 0;
             }

@@ -30,6 +30,7 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+import org.corfudb.util.concurrent.SingletonResource;
 
 /**
  * The orchestrator is a stateless service that runs on all management servers and its purpose
@@ -46,11 +47,11 @@ public class Orchestrator {
 
     final ServerContext serverContext;
 
-    final Callable<CorfuRuntime> getRuntime;
+    final SingletonResource<CorfuRuntime> getRuntime;
 
     final BiMap<UUID, String> activeWorkflows = Maps.synchronizedBiMap(HashBiMap.create());
 
-    public Orchestrator(@Nonnull Callable<CorfuRuntime> runtime,
+    public Orchestrator(@Nonnull SingletonResource<CorfuRuntime> runtime,
                         @Nonnull ServerContext serverContext) {
         this.serverContext = serverContext;
         this.getRuntime = runtime;
@@ -153,8 +154,8 @@ public class Orchestrator {
     void run(@Nonnull IWorkflow workflow) {
         CorfuRuntime rt = null;
         try {
-            getRuntime.call().invalidateLayout();
-            Layout currLayout = getRuntime.call().getLayoutView().getLayout();
+            getRuntime.get().invalidateLayout();
+            Layout currLayout = getRuntime.get().getLayoutView().getLayout();
 
             List<NodeLocator> servers = currLayout.getAllServers().stream()
                     .map(NodeLocator::parseString)

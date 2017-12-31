@@ -99,8 +99,8 @@ public class ManagementViewTest extends AbstractViewTest {
 
         // Set aggressive timeouts.
         setAggressiveTimeouts(l, corfuRuntime,
-                getManagementServer(SERVERS.PORT_0).getCorfuRuntime(),
-                getManagementServer(SERVERS.PORT_1).getCorfuRuntime());
+                getManagementServer(SERVERS.PORT_0).getRuntime(),
+                getManagementServer(SERVERS.PORT_1).getRuntime());
 
         failureDetected.acquire();
 
@@ -110,7 +110,7 @@ public class ManagementViewTest extends AbstractViewTest {
 
         // Adding a rule on SERVERS.PORT_1 to toggle the flag when it sends the
         // MANAGEMENT_FAILURE_DETECTED message.
-        addClientRule(getManagementServer(SERVERS.PORT_1).getCorfuRuntime(),
+        addClientRule(getManagementServer(SERVERS.PORT_1).getRuntime(),
                 new TestRule().matches(corfuMsg -> {
                     if (corfuMsg.getMsgType().equals(CorfuMsgType
                             .MANAGEMENT_FAILURE_DETECTED)) {
@@ -173,9 +173,9 @@ public class ManagementViewTest extends AbstractViewTest {
 
         // Setting aggressive timeouts
         setAggressiveTimeouts(l, corfuRuntime,
-                getManagementServer(SERVERS.PORT_0).getCorfuRuntime(),
-                getManagementServer(SERVERS.PORT_1).getCorfuRuntime(),
-                getManagementServer(SERVERS.PORT_2).getCorfuRuntime());
+                getManagementServer(SERVERS.PORT_0).getRuntime(),
+                getManagementServer(SERVERS.PORT_1).getRuntime(),
+                getManagementServer(SERVERS.PORT_2).getRuntime());
 
         // Adding a rule on SERVERS.PORT_1 to drop all packets
         addServerRule(SERVERS.PORT_1, new TestRule().always().drop());
@@ -237,9 +237,9 @@ public class ManagementViewTest extends AbstractViewTest {
 
         // Setting aggressive timeouts
         setAggressiveTimeouts(l, corfuRuntime,
-                getManagementServer(SERVERS.PORT_0).getCorfuRuntime(),
-                getManagementServer(SERVERS.PORT_1).getCorfuRuntime(),
-                getManagementServer(SERVERS.PORT_2).getCorfuRuntime());
+                getManagementServer(SERVERS.PORT_0).getRuntime(),
+                getManagementServer(SERVERS.PORT_1).getRuntime(),
+                getManagementServer(SERVERS.PORT_2).getRuntime());
 
         return l;
     }
@@ -280,17 +280,17 @@ public class ManagementViewTest extends AbstractViewTest {
 
         // PART 1.
         // Prevent ENDPOINT_1 from sealing.
-        addClientRule(getManagementServer(SERVERS.PORT_0).getCorfuRuntime(), SERVERS.ENDPOINT_1,
+        addClientRule(getManagementServer(SERVERS.PORT_0).getRuntime(), SERVERS.ENDPOINT_1,
                 new TestRule()
                         .matches(corfuMsg -> corfuMsg.getMsgType().equals(CorfuMsgType.SET_EPOCH))
                         .drop());
         // Simulate ENDPOINT_2 failure from ENDPOINT_0 (only Management Server)
-        addClientRule(getManagementServer(SERVERS.PORT_0).getCorfuRuntime(), SERVERS.ENDPOINT_2,
+        addClientRule(getManagementServer(SERVERS.PORT_0).getRuntime(), SERVERS.ENDPOINT_2,
                 new TestRule().matches(corfuMsg -> true).drop());
 
         // Adding a rule on SERVERS.PORT_1 to toggle the flag when it sends the
         // MANAGEMENT_FAILURE_DETECTED message.
-        addClientRule(getManagementServer(SERVERS.PORT_0).getCorfuRuntime(),
+        addClientRule(getManagementServer(SERVERS.PORT_0).getRuntime(),
                 new TestRule().matches(corfuMsg -> {
                     if (corfuMsg.getMsgType().equals(CorfuMsgType.MANAGEMENT_FAILURE_DETECTED)) {
                         failureDetected.release();
@@ -310,7 +310,7 @@ public class ManagementViewTest extends AbstractViewTest {
         assertThat(failureDetected.tryAcquire(2, PARAMETERS.TIMEOUT_NORMAL.toNanos(),
                 TimeUnit.NANOSECONDS)).isEqualTo(true);
 
-        addClientRule(getManagementServer(SERVERS.PORT_0).getCorfuRuntime(),
+        addClientRule(getManagementServer(SERVERS.PORT_0).getRuntime(),
                 new TestRule().matches(corfuMsg -> corfuMsg.getMsgType().equals(CorfuMsgType.MANAGEMENT_FAILURE_DETECTED)
                 ).drop());
 
@@ -325,7 +325,7 @@ public class ManagementViewTest extends AbstractViewTest {
 
         // PART 2.
         // Simulate normal operations for all servers and clients.
-        clearClientRules(getManagementServer(SERVERS.PORT_0).getCorfuRuntime());
+        clearClientRules(getManagementServer(SERVERS.PORT_0).getRuntime());
 
         // PART 3.
         // Allow management server to detect partial seal and correct this issue.
@@ -697,7 +697,7 @@ public class ManagementViewTest extends AbstractViewTest {
         // Allow only SERVERS.PORT_0 to handle the failure.
         // Shutting down PORT_2
         getManagementServer(SERVERS.PORT_2).shutdown();
-        addClientRule(getManagementServer(SERVERS.PORT_1).getCorfuRuntime(),
+        addClientRule(getManagementServer(SERVERS.PORT_1).getRuntime(),
                 new TestRule().matches(msg -> {
                     if (msg.getMsgType().equals(CorfuMsgType.BOOTSTRAP_SEQUENCER)) {
                         try {
@@ -726,21 +726,6 @@ public class ManagementViewTest extends AbstractViewTest {
         // We should be able to request a token now.
         corfuRuntime.getSequencerView().nextToken(Collections.singleton(CorfuRuntime
                 .getStreamID("testStream")), 1);
-    }
-
-    @Test
-    public void sealDoesNotModifyClientRouterEpoch() throws Exception {
-        Layout l = getManagementTestLayout();
-
-        // Seal
-        Layout currentLayout = corfuRuntime.getLayoutView().getCurrentLayout();
-        currentLayout.setEpoch(currentLayout.getEpoch() + 1);
-        currentLayout.moveServersToEpoch();
-
-        for (String router : l.getAllServers()) {
-            assertThat(corfuRuntime.getRouter(router).getEpoch()).isEqualTo(1L);
-        }
-
     }
 
     @Test
@@ -830,9 +815,9 @@ public class ManagementViewTest extends AbstractViewTest {
         CorfuRuntime corfuRuntime = getRuntime(l).connect();
 
         setAggressiveTimeouts(l, corfuRuntime,
-                getManagementServer(SERVERS.PORT_0).getCorfuRuntime(),
-                getManagementServer(SERVERS.PORT_1).getCorfuRuntime(),
-                getManagementServer(SERVERS.PORT_2).getCorfuRuntime());
+                getManagementServer(SERVERS.PORT_0).getRuntime(),
+                getManagementServer(SERVERS.PORT_1).getRuntime(),
+                getManagementServer(SERVERS.PORT_2).getRuntime());
 
         corfuRuntime.getRouter(SERVERS.ENDPOINT_0).getClient(ManagementClient.class)
                 .initiateFailureHandler().get();

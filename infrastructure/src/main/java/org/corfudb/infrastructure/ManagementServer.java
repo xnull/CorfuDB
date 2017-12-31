@@ -2,9 +2,7 @@ package org.corfudb.infrastructure;
 
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-
 import io.netty.channel.ChannelHandlerContext;
-
 import java.lang.invoke.MethodHandles;
 import java.util.Arrays;
 import java.util.Collections;
@@ -20,10 +18,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
+import javax.annotation.Nonnull;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-
 import org.corfudb.format.Types.NodeMetrics;
 import org.corfudb.infrastructure.management.IFailureDetectorPolicy;
 import org.corfudb.infrastructure.management.PollReport;
@@ -40,11 +37,12 @@ import org.corfudb.runtime.clients.LayoutClient;
 import org.corfudb.runtime.clients.ManagementClient;
 import org.corfudb.runtime.clients.SequencerClient;
 import org.corfudb.runtime.exceptions.QuorumUnreachableException;
+import org.corfudb.runtime.exceptions.ServerNotReadyException;
 import org.corfudb.runtime.view.IFailureHandlerPolicy;
 import org.corfudb.runtime.view.Layout;
 import org.corfudb.runtime.view.QuorumFuturesFactory;
-
-import javax.annotation.Nonnull;
+import org.corfudb.util.UuidUtils;
+import org.corfudb.util.concurrent.SingletonResource;
 
 /**
  * Instantiates and performs failure detection and handling asynchronously.
@@ -69,7 +67,12 @@ public class ManagementServer extends AbstractServer {
     private static final String PREFIX_MANAGEMENT = "MANAGEMENT";
     private static final String KEY_LAYOUT = "LAYOUT";
 
-    private CorfuRuntime corfuRuntime;
+    /**
+     * A {@link SingletonResource} which provides a {@link CorfuRuntime}.
+     */
+    private final SingletonResource<CorfuRuntime> runtime =
+            SingletonResource.withInitial(this::getNewRuntime);
+
     /**
      * Policy to be used to detect failures.
      */
@@ -148,7 +151,8 @@ public class ManagementServer extends AbstractServer {
                 2,
                 new ThreadFactoryBuilder()
                         .setDaemon(true)
-                        .setNameFormat("FaultDetector-%d-" + getLocalEndpoint())
+                        .setNameFormat("FaultDetector-%d-"
+                            + UuidUtils.asBase64(serverContext.getLocalEndpoint().getNodeId()))
                         .build());
 
         // Initiating periodic task to poll for failures.
@@ -162,13 +166,14 @@ public class ManagementServer extends AbstractServer {
             log.error("Error scheduling failure detection task, {}", err);
         }
 
-        orchestrator = new Orchestrator(this::getCorfuRuntime, serverContext);
+        orchestrator = new Orchestrator(runtime, serverContext);
     }
 
     private void bootstrapPrimarySequencerServer() {
         try {
             String primarySequencer = latestLayout.getSequencers().get(0);
-            boolean bootstrapResult = getCorfuRuntime().getRouter(primarySequencer)
+            runtime.get().getRouter(primarySequencer).setEpoch(latestLayout.getEpoch());
+            boolean bootstrapResult = runtime.get().getRouter(primarySequencer)
                     .getClient(SequencerClient.class)
                     .bootstrap(0L, Collections.emptyMap(), latestLayout.getEpoch())
                     .get();
@@ -182,13 +187,13 @@ public class ManagementServer extends AbstractServer {
         } catch (InterruptedException | ExecutionException e) {
             log.error("Bootstrapping sequencer failed. Retrying: {}", e);
         }
-        getCorfuRuntime().invalidateLayout();
+        runtime.get().invalidateLayout();
     }
 
     private boolean recover() {
             boolean recoveryResult = reconfigurationEventHandler
-                    .recoverCluster(new Layout(latestLayout), getCorfuRuntime());
-            safeUpdateLayout(corfuRuntime.getLayoutView().getLayout());
+                    .recoverCluster(new Layout(latestLayout), runtime.get());
+            safeUpdateLayout(runtime.get().getLayoutView().getLayout());
             return recoveryResult;
 
     }
@@ -198,7 +203,7 @@ public class ManagementServer extends AbstractServer {
      */
     @Getter
     private final CorfuMsgHandler handler =
-        CorfuMsgHandler.generateHandler(MethodHandles.lookup(), this);
+            CorfuMsgHandler.generateHandler(MethodHandles.lookup(), this);
 
     /**
      * Thread safe updating of layout only if new layout has higher epoch value.
@@ -338,7 +343,7 @@ public class ManagementServer extends AbstractServer {
             boolean result = reconfigurationEventHandler.handleFailure(
                     failureHandlerPolicy,
                     new Layout(latestLayout),
-                    getCorfuRuntime(),
+                    runtime.get(),
                     msg.getPayload().getFailedNodes(),
                     msg.getPayload().getHealedNodes());
             if (result) {
@@ -373,30 +378,25 @@ public class ManagementServer extends AbstractServer {
      *
      * @return A connected instance of runtime.
      */
-    public synchronized CorfuRuntime getCorfuRuntime() {
-
-        if (corfuRuntime == null) {
-            CorfuRuntimeParameters params = serverContext.getDefaultRuntimeParameters();
-            corfuRuntime = CorfuRuntime.fromParameters(params);
-            // Runtime can be set up either using the layout or the bootstrapEndpoint address.
-            if (latestLayout != null) {
-                latestLayout.getLayoutServers().forEach(ls -> corfuRuntime.addLayoutServer(ls));
-            } else {
-                corfuRuntime.addLayoutServer(bootstrapEndpoint);
-            }
-            corfuRuntime.connect();
-            log.info("getCorfuRuntime: Corfu Runtime connected successfully");
+    private CorfuRuntime getNewRuntime() {
+        log.trace("getRuntime: Corfu Runtime connecting...");
+        if (latestLayout == null
+            && bootstrapEndpoint == null) {
+            throw new ServerNotReadyException();
         }
-        return corfuRuntime;
-    }
-
-    /**
-     * Gets the address of this endpoint.
-     *
-     * @return localEndpoint address
-     */
-    private String getLocalEndpoint() {
-        return this.opts.get("--address") + ":" + this.opts.get("<port>");
+        final CorfuRuntimeParameters params = serverContext.getDefaultRuntimeParameters();
+        final CorfuRuntime runtime = CorfuRuntime.fromParameters(params);
+        // Runtime can be set up either using the layout or the bootstrapEndpoint address.
+        if (latestLayout != null) {
+            log.info("getRuntime: Using layout {}", latestLayout.getLayoutServers());
+            latestLayout.getLayoutServers().forEach(runtime::addLayoutServer);
+        } else {
+            log.info("getRuntime: Using bootstrap endpoint {}", bootstrapEndpoint);
+            runtime.addLayoutServer(bootstrapEndpoint);
+        }
+        runtime.connect();
+        log.info("getRuntime: Corfu Runtime connected successfully");
+        return runtime;
     }
 
     /**
@@ -433,7 +433,7 @@ public class ManagementServer extends AbstractServer {
      *
      * <p>It first checks whether the current node is bootstrapped.
      * If not, it continues checking in intervals of 1 second.
-     * If yes, it sets up the corfuRuntime and continues execution
+     * If yes, it sets up the runtime and continues execution
      * of the policy.
      *
      * <p>It executes the policy which detects and reports failures.
@@ -445,25 +445,23 @@ public class ManagementServer extends AbstractServer {
      * After every poll it checks for any failures detected.
      */
     private void failureDetectorTask() {
+            CorfuRuntime corfuRuntime = runtime.get();
+            corfuRuntime.invalidateLayout();
 
-        CorfuRuntime corfuRuntime = getCorfuRuntime();
-        corfuRuntime.invalidateLayout();
+            safeUpdateLayout(corfuRuntime.getLayoutView().getLayout());
 
-        safeUpdateLayout(corfuRuntime.getLayoutView().getLayout());
+            // Execute the failure detection policy once.
+            failureDetectorPolicy.executePolicy(latestLayout, corfuRuntime);
 
-        // Execute the failure detection policy once.
-        failureDetectorPolicy.executePolicy(latestLayout, corfuRuntime);
+            // Get the server status from the policy and check for failures.
+            PollReport pollReport = failureDetectorPolicy.getServerStatus();
 
-        // Get the server status from the policy and check for failures.
-        PollReport pollReport = failureDetectorPolicy.getServerStatus();
+            // Corrects out of phase epoch issues if present in the report. This method performs
+            // re-sealing of all nodes if required and catchup of a layout server to the current state.
+            correctOutOfPhaseEpochs(pollReport);
 
-        // Corrects out of phase epoch issues if present in the report. This method performs
-        // re-sealing of all nodes if required and catchup of a layout server to the current state.
-        correctOutOfPhaseEpochs(pollReport);
-
-        // Analyze the poll report and trigger failure handler if needed.
-        analyzePollReportAndTriggerHandler(pollReport);
-
+            // Analyze the poll report and trigger failure handler if needed.
+            analyzePollReportAndTriggerHandler(pollReport);
     }
 
     /**
@@ -523,13 +521,17 @@ public class ManagementServer extends AbstractServer {
 
         // We check for 2 conditions here: If the node is a part of the current layout or has it
         // been marked as unresponsive. If either is true, it should not attempt to change layout.
-        if (!latestLayout.getAllServers().contains(getLocalEndpoint())
-                || latestLayout.getUnresponsiveServers().contains(getLocalEndpoint())) {
-            log.warn("This Server is not a part of the active layout. Aborting failure handling.");
+        if (!latestLayout.containsServer(serverContext.getLocalEndpoint())
+                || latestLayout.containsUnresponsiveServer(serverContext.getLocalEndpoint())) {
+            log.warn("analyzePollReportAndTriggerHandler: "
+                    + "{} is not a part of the active layout. Aborting. [active: {}]",
+                    serverContext.getLocalEndpoint(),
+                    latestLayout.getAllServers());
             return;
         }
 
-        final ManagementClient localManagementClient = corfuRuntime.getRouter(getLocalEndpoint())
+        final ManagementClient localManagementClient =
+                runtime.get().getRouter(serverContext.getLocalEndpoint().toString())
                 .getClient(ManagementClient.class);
 
         try {
@@ -574,9 +576,12 @@ public class ManagementServer extends AbstractServer {
         }
 
         // If node has been removed. Then it should not attempt to change layout.
-        if (!latestLayout.getAllServers().contains(getLocalEndpoint())
-                || latestLayout.getUnresponsiveServers().contains(getLocalEndpoint())) {
-            log.warn("This Server is not a part of the active layout. Aborting failure handling.");
+        if (!latestLayout.containsServer(serverContext.getLocalEndpoint())
+                || latestLayout.containsUnresponsiveServer(serverContext.getLocalEndpoint())) {
+            log.warn("correctOutOfPhaseEpochs: "
+                    + "{} is not a part of the active layout. Aborting. [active: {}]",
+                    serverContext.getLocalEndpoint(),
+                    latestLayout.getAllServers());
             return;
         }
 
@@ -591,7 +596,7 @@ public class ManagementServer extends AbstractServer {
             Map<String, CompletableFuture<Layout>> layoutCompletableFutureMap = new HashMap<>();
             for (String layoutServer : latestLayout.getLayoutServers()) {
                 layoutCompletableFutureMap.put(
-                        layoutServer, getCorfuRuntime().getRouter(layoutServer)
+                        layoutServer, runtime.get().getRouter(layoutServer)
                                 .getClient(LayoutClient.class).getLayout());
             }
 
@@ -606,7 +611,7 @@ public class ManagementServer extends AbstractServer {
 
             // We clone the layout to not pollute the original latestLayout.
             Layout sealLayout = new Layout(latestLayout);
-            sealLayout.setRuntime(getCorfuRuntime());
+            sealLayout.setRuntime(runtime.get());
 
             // In case of a partial seal, a set of servers can be sealed with a higher epoch.
             // We should be able to detect this and bring the rest of the servers to this epoch.
@@ -683,7 +688,7 @@ public class ManagementServer extends AbstractServer {
                 // Committing this layout directly to the trailing layout servers.
                 // This is safe because this layout is acquired by a quorum fetch which confirms
                 // that there was a consensus on this layout and has been committed to a quorum.
-                boolean result = getCorfuRuntime().getRouter(layoutServer)
+                boolean result = runtime.get().getRouter(layoutServer)
                         .getClient(LayoutClient.class)
                         .committed(latestLayout.getEpoch(), latestLayout).get();
                 if (result) {
@@ -705,13 +710,10 @@ public class ManagementServer extends AbstractServer {
      */
     public void shutdown() {
         super.shutdown();
+        log.info("Management Server shutting down.");
         // Shutting the fault detector.
         failureDetectorService.shutdownNow();
-
-        // Shut down the Corfu Runtime.
-        if (corfuRuntime != null) {
-            corfuRuntime.shutdown();
-        }
+        runtime.cleanup(CorfuRuntime::shutdown);
 
         try {
             failureDetectorService.awaitTermination(ServerContext.SHUTDOWN_TIMER.getSeconds(),
@@ -719,6 +721,17 @@ public class ManagementServer extends AbstractServer {
         } catch (InterruptedException ie) {
             log.debug("failureDetectorService awaitTermination interrupted : {}", ie);
         }
-        log.info("Management Server shutting down.");
+        log.info("Management Server shut down.");
+    }
+
+    /** Get a {@link org.corfudb.runtime.CorfuRuntime}.
+     *
+     * @return A {@link CorfuRuntime}.
+     * @deprecated This public API is scheduled to be deprecated. Please use the private
+     *             {@link SingletonResource} {@link ManagementServer#runtime} field instead.
+     */
+    @Deprecated
+    public CorfuRuntime getRuntime() {
+       return runtime.get();
     }
 }

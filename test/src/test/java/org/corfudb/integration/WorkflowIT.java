@@ -70,7 +70,9 @@ public class WorkflowIT extends AbstractIT {
                 .setPort(n2Port)
                 .runServer();
 
-        ManagementClient mgmt = n1Rt.getRouter(getConnectionString(n1Port))
+        // Since server started in single node, sequencer is same node as management server
+        String mgmtNode = n1Rt.getLayoutView().getLayout().getSequencers().get(0);
+        ManagementClient mgmt = n1Rt.getRouter(mgmtNode)
                 .getClient(ManagementClient.class);
 
         CreateWorkflowResponse resp = mgmt.addNodeRequest(getConnectionString(n2Port));

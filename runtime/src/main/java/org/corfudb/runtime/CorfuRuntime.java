@@ -371,7 +371,7 @@ public class CorfuRuntime {
      * Cannot reuse the runtime once shutdown is called.
      */
     public void shutdown() {
-
+        log.warn("shutdown");
         // Stopping async task from fetching layout.
         isShutdown = true;
         if (layout != null) {
@@ -559,30 +559,13 @@ public class CorfuRuntime {
                         checkClusterId(l);
 
                         l.setRuntime(this);
-                        // this.layout should only be assigned to the new layout future
-                        // once it has been completely constructed and initialized.
-                        // For example, assigning this.layout = l
-                        // before setting the layout's runtime can result in other threads
-                        // trying to access a layout with  a null runtime.
-                        // FIXME Synchronization START
-                        // We are updating multiple variables and we need the update to be
-                        // synchronized across all variables.
-                        // Since the variable layoutServers is used only locally within the class
-                        // it is acceptable (at least the code on 10/13/2016 does not have issues)
-                        // but setEpoch of routers needs to be synchronized as those variables are
-                        // not local.
-                        for (String server : l.getAllServers()) {
-                            try {
-                                getRouter(server).setEpoch(l.getEpoch());
-                            } catch (NetworkException ne) {
-                                // We have already received the layout and there is no need to keep
-                                // client waiting.
-                                // NOTE: This is true assuming this happens only at router creation.
-                                // If not we also have to take care of setting the latest epoch on
-                                // Client Router.
-                                log.warn("fetchLayout: Error getting router : {}", ne);
-                            }
-                        }
+
+                        // Generate a router for each node and set the epoch
+                        l.getAllServers().forEach(server -> {
+                            getRouter(server).setEpoch(l.getEpoch());
+                        });
+
+
                         layoutServers = l.getLayoutServers();
                         layout = layoutFuture;
                         //FIXME Synchronization END
@@ -604,6 +587,7 @@ public class CorfuRuntime {
 
                 Sleep.sleepUninterruptibly(parameters.connectionRetryRate);
                 if (isShutdown) {
+                    log.warn("Shutting down");
                     return null;
                 }
             }

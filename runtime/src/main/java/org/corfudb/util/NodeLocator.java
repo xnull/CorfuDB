@@ -98,6 +98,13 @@ public class NodeLocator implements Serializable {
         }
     }
 
+    /** Get a legacy string, which can be used whenever the previous host:port notation
+     *  was used.
+     * @return  A legacy string representation for this node.
+     */
+    public String toLegacyString() {
+        return getHost() + ":" + getPort();
+    }
 
     @Override
     public String toString() {
