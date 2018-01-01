@@ -161,8 +161,8 @@ public class WorkflowIT extends AbstractIT {
 
     void waitForWorkflow(@Nonnull UUID id,
                          @Nonnull CorfuRuntime rt,
-                         @Nonnull NodeLocator locator) throws Exception {
-        for (int x = 0; x < PARAMETERS.NUM_ITERATIONS_LOW; x++) {
+                         @Nonnull NodeLocator locator) {
+        for (int x = 0; x < PARAMETERS.NUM_ITERATIONS_VERY_LOW; x++) {
             try {
                 ManagementClient mgmt = getManagementClient(rt, locator);
                 if (mgmt.queryRequest(id).isActive()) {
