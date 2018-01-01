@@ -127,7 +127,8 @@ public class WorkflowIT extends AbstractIT {
     }
 
     void waitForWorkflow(UUID id, CorfuRuntime rt, int port) throws Exception {
-        ManagementClient mgmt = rt.getRouter(getConnectionString(port))
+        String mgmtNode = rt.getLayoutView().getLayout().getSequencers().get(0);
+        ManagementClient mgmt = rt.getRouter(mgmtNode)
                 .getClient(ManagementClient.class);
         for (int x = 0; x < maxTries; x++) {
             try {
