@@ -130,7 +130,7 @@ public class CorfuTable<K ,V, F extends Enum<F> & CorfuTable.IndexSpecification,
     /** An index specification enumeration which has no index specifications.
      *  Using this enumeration effectively disables secondary indexes.
      */
-    enum NoSecondaryIndex implements IndexSpecification {
+    public enum NoSecondaryIndex implements IndexSpecification {
         ;
 
         @Override

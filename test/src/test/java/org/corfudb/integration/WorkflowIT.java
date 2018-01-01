@@ -1,11 +1,19 @@
 package org.corfudb.integration;
 
+import com.google.common.reflect.TypeToken;
+import javax.annotation.Nonnull;
 import lombok.extern.slf4j.Slf4j;
 import org.corfudb.protocols.wireprotocol.orchestrator.CreateWorkflowResponse;
 import org.corfudb.runtime.CorfuRuntime;
+import org.corfudb.runtime.CorfuRuntime.CorfuRuntimeParameters;
 import org.corfudb.runtime.MultiCheckpointWriter;
+import org.corfudb.runtime.clients.IClientRouter;
 import org.corfudb.runtime.clients.ManagementClient;
 import org.corfudb.runtime.collections.CorfuTable;
+import org.corfudb.runtime.collections.CorfuTable.NoSecondaryIndex;
+import org.corfudb.runtime.exceptions.WrongEpochException;
+import org.corfudb.util.NodeLocator;
+import org.corfudb.util.Sleep;
 import org.junit.Test;
 
 import java.util.UUID;
@@ -29,10 +37,6 @@ public class WorkflowIT extends AbstractIT {
 
     final String host = "localhost";
 
-    final int maxTries = 10;
-
-    final int sleepTime = 5_000;
-
     String getConnectionString(int port) {
         return host + ":" + port;
     }
@@ -42,6 +46,7 @@ public class WorkflowIT extends AbstractIT {
         final String host = "localhost";
         final String streamName = "s1";
         final int n1Port = 9000;
+        final int numEntries = 12_000;
 
         // Start node one and populate it with data
         new CorfuServerRunner()
@@ -50,15 +55,25 @@ public class WorkflowIT extends AbstractIT {
                 .setSingle(true)
                 .runServer();
 
-        CorfuRuntime n1Rt = new CorfuRuntime(getConnectionString(n1Port)).connect();
+        CorfuRuntime n1Rt = CorfuRuntime.fromParameters(
+            CorfuRuntimeParameters.builder()
+                .layoutServer(
+                    NodeLocator.builder()
+                        .host(host)
+                        .port(n1Port)
+                        .build())
+                .build());
 
-        CorfuTable table = n1Rt.getObjectsView()
+        n1Rt.connect();
+
+        CorfuTable<String, String, NoSecondaryIndex, Void> table =
+            n1Rt.getObjectsView()
                 .build()
-                .setType(CorfuTable.class)
+                .setTypeToken(
+                    new TypeToken<CorfuTable<String, String, NoSecondaryIndex, Void>>() {})
                 .setStreamName(streamName)
                 .open();
 
-        final int numEntries = 12_000;
         for (int x = 0; x < numEntries; x++) {
             table.put(String.valueOf(x), String.valueOf(x));
         }
@@ -71,22 +86,23 @@ public class WorkflowIT extends AbstractIT {
                 .runServer();
 
         // Since server started in single node, sequencer is same node as management server
-        String mgmtNode = n1Rt.getLayoutView().getLayout().getSequencers().get(0);
-        ManagementClient mgmt = n1Rt.getRouter(mgmtNode)
-                .getClient(ManagementClient.class);
+        final String mgmtNode = n1Rt.getLayoutView().getLayout().getSequencers().get(0);
+        final NodeLocator mgmtLocator = NodeLocator.parseString(mgmtNode);
 
-        CreateWorkflowResponse resp = mgmt.addNodeRequest(getConnectionString(n2Port));
+        CreateWorkflowResponse resp = getManagementClient(n1Rt, mgmtLocator)
+                                            .addNodeRequest(getConnectionString(n2Port));
 
         assertThat(resp.getWorkflowId()).isNotNull();
 
-        waitForWorkflow(resp.getWorkflowId(), n1Rt, n1Port);
+        waitForWorkflow(resp.getWorkflowId(), n1Rt, mgmtLocator);
 
         n1Rt.invalidateLayout();
         final int clusterSizeN2 = 2;
         assertThat(n1Rt.getLayoutView().getLayout().getAllServers().size()).isEqualTo(clusterSizeN2);
 
         // Verify that the workflow ID for node 2 is no longer active
-        assertThat(mgmt.queryRequest(resp.getWorkflowId()).isActive()).isFalse();
+        assertThat(getManagementClient(n1Rt, mgmtLocator)
+                        .queryRequest(resp.getWorkflowId()).isActive()).isFalse();
 
         MultiCheckpointWriter mcw = new MultiCheckpointWriter();
         mcw.addMap(table);
@@ -107,10 +123,12 @@ public class WorkflowIT extends AbstractIT {
                 .setPort(n3Port)
                 .runServer();
 
-        CreateWorkflowResponse resp2 = mgmt.addNodeRequest(getConnectionString(n3Port));
+        CreateWorkflowResponse resp2 = getManagementClient(n1Rt, mgmtLocator)
+                                            .addNodeRequest(getConnectionString(n3Port));
+
         assertThat(resp2.getWorkflowId()).isNotNull();
 
-        waitForWorkflow(resp2.getWorkflowId(), n1Rt, n1Port);
+        waitForWorkflow(resp2.getWorkflowId(), n1Rt, mgmtLocator);
 
         // Verify that the third node has been added and data can be read back
         n1Rt.invalidateLayout();
@@ -118,29 +136,46 @@ public class WorkflowIT extends AbstractIT {
         final int clusterSizeN3 = 3;
         assertThat(n1Rt.getLayoutView().getLayout().getAllServers().size()).isEqualTo(clusterSizeN3);
         // Verify that the workflow ID for node 3 is no longer active
-        assertThat(mgmt.queryRequest(resp2.getWorkflowId()).isActive()).isFalse();
+        assertThat(getManagementClient(n1Rt, mgmtLocator)
+                            .queryRequest(resp2.getWorkflowId()).isActive()).isFalse();
 
         for (int x = 0; x < numEntries; x++) {
-            String v = (String) table.get(String.valueOf(x));
+            String v = table.get(String.valueOf(x));
             assertThat(v).isEqualTo(String.valueOf(x));
         }
     }
 
-    void waitForWorkflow(UUID id, CorfuRuntime rt, int port) throws Exception {
-        String mgmtNode = rt.getLayoutView().getLayout().getSequencers().get(0);
-        ManagementClient mgmt = rt.getRouter(mgmtNode)
-                .getClient(ManagementClient.class);
-        for (int x = 0; x < maxTries; x++) {
+    /** Get a management client using a {@link CorfuRuntime} and {@link NodeLocator},
+     *  setting it's epoch to the latest epoch.
+     * @param runtime   The {@link CorfuRuntime} to use
+     * @param locator   The {@link NodeLocator} to use
+     * @return  A {@link ManagementClient}
+     */
+    private ManagementClient getManagementClient(@Nonnull CorfuRuntime runtime,
+                                         @Nonnull NodeLocator locator) {
+        IClientRouter router = runtime.getRouter(locator.toString());
+        // Make sure router is in the correct epoch.
+        router.setEpoch(runtime.getLayoutView().getLayout().getEpoch());
+        return router.getClient(ManagementClient.class);
+    }
+
+    void waitForWorkflow(@Nonnull UUID id,
+                         @Nonnull CorfuRuntime rt,
+                         @Nonnull NodeLocator locator) throws Exception {
+        for (int x = 0; x < PARAMETERS.NUM_ITERATIONS_LOW; x++) {
             try {
+                ManagementClient mgmt = getManagementClient(rt, locator);
                 if (mgmt.queryRequest(id).isActive()) {
-                    Thread.sleep(sleepTime);
+                    Sleep.sleepUninterruptibly(PARAMETERS.TIMEOUT_SHORT);
                 } else {
                     break;
                 }
-            } catch (Exception e) {
+            } catch (WrongEpochException e) {
                 rt.invalidateLayout();
-                Thread.sleep(sleepTime);
             }
         }
+        assertThat(false)
+            .as("Workflow is still active after " + PARAMETERS.NUM_ITERATIONS_LOW
+                + " retries");
     }
 }

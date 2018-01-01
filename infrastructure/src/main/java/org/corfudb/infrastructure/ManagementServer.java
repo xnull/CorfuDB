@@ -121,11 +121,18 @@ public class ManagementServer extends AbstractServer {
     private final Orchestrator orchestrator;
 
     /**
+     * Handler for this server.
+     */
+    @Getter
+    private final CorfuMsgHandler handler =
+            CorfuMsgHandler.generateHandler(MethodHandles.lookup(), this);
+
+    /**
      * Returns new ManagementServer.
      *
      * @param serverContext context object providing parameters and objects
      */
-    public ManagementServer(ServerContext serverContext) {
+    public ManagementServer(@Nonnull ServerContext serverContext) {
 
         this.opts = serverContext.getServerConfig();
         this.serverContext = serverContext;
@@ -198,12 +205,6 @@ public class ManagementServer extends AbstractServer {
 
     }
 
-    /**
-     * Handler for this server.
-     */
-    @Getter
-    private final CorfuMsgHandler handler =
-            CorfuMsgHandler.generateHandler(MethodHandles.lookup(), this);
 
     /**
      * Thread safe updating of layout only if new layout has higher epoch value.
