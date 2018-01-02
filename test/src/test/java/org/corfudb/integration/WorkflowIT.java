@@ -46,7 +46,6 @@ public class WorkflowIT extends AbstractIT {
         final String host = "localhost";
         final String streamName = "s1";
         final int n1Port = 9000;
-        final int numEntries = 12_000;
 
         // Start node one and populate it with data
         new CorfuServerRunner()
@@ -74,7 +73,7 @@ public class WorkflowIT extends AbstractIT {
                 .setStreamName(streamName)
                 .open();
 
-        for (int x = 0; x < numEntries; x++) {
+        for (int x = 0; x < PARAMETERS.NUM_ITERATIONS_MODERATE; x++) {
             table.put(String.valueOf(x), String.valueOf(x));
         }
 
@@ -139,7 +138,7 @@ public class WorkflowIT extends AbstractIT {
         assertThat(getManagementClient(n1Rt, mgmtLocator)
                             .queryRequest(resp2.getWorkflowId()).isActive()).isFalse();
 
-        for (int x = 0; x < numEntries; x++) {
+        for (int x = 0; x < PARAMETERS.NUM_ITERATIONS_MODERATE; x++) {
             String v = table.get(String.valueOf(x));
             assertThat(v).isEqualTo(String.valueOf(x));
         }
@@ -162,13 +161,13 @@ public class WorkflowIT extends AbstractIT {
     void waitForWorkflow(@Nonnull UUID id,
                          @Nonnull CorfuRuntime rt,
                          @Nonnull NodeLocator locator) {
-        for (int x = 0; x < PARAMETERS.NUM_ITERATIONS_VERY_LOW; x++) {
+        for (int x = 0; x < PARAMETERS.NUM_ITERATIONS_LOW; x++) {
             try {
                 ManagementClient mgmt = getManagementClient(rt, locator);
                 if (mgmt.queryRequest(id).isActive()) {
                     Sleep.sleepUninterruptibly(PARAMETERS.TIMEOUT_SHORT);
                 } else {
-                    break;
+                    return;
                 }
             } catch (WrongEpochException e) {
                 rt.invalidateLayout();
@@ -176,6 +175,7 @@ public class WorkflowIT extends AbstractIT {
         }
         assertThat(false)
             .as("Workflow is still active after " + PARAMETERS.NUM_ITERATIONS_LOW
-                + " retries");
+                + " retries")
+            .isEqualTo(true);
     }
 }
