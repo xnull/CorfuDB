@@ -1,129 +1,90 @@
 package org.corfudb.runtime.view;
 
-import org.corfudb.infrastructure.TestLayoutBuilder;
-import org.corfudb.runtime.CorfuRuntime;
-import org.corfudb.runtime.clients.TestRule;
-import org.corfudb.runtime.exceptions.QuorumUnreachableException;
-import org.junit.Test;
-
-import java.util.ArrayList;
-import java.util.List;
-
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.corfudb.test.assertions.CorfuAssertions.assertThat;
+import static org.corfudb.test.util.ServerTestUtil.disconnectAndBlacklistClientFromServer;
 
-/**
- * Tests sealing scenarios.
- *
- * Created by zlokhandwala on 3/7/17.
- */
-public class LayoutSealTest extends AbstractViewTest {
+import org.corfudb.infrastructure.CorfuServer;
+import org.corfudb.runtime.CorfuRuntime;
+import org.corfudb.runtime.exceptions.QuorumUnreachableException;
+import org.corfudb.runtime.view.Layout.LayoutSegment;
+import org.corfudb.runtime.view.Layout.LayoutStripe;
+import org.corfudb.runtime.view.Layout.ReplicationMode;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.parameters.LayoutProvider;
+import org.corfudb.test.parameters.Server;
+import org.corfudb.test.parameters.Servers;
 
-    /**
-     * Gets a layout with 5 Servers:
-     * PORT_0, PORT_1, PORT_2, PORT_3, PORT_4
-     * Sets the replication view as specified.
-     *
-     * @param replicationMode Replication view to set all segments in the layout with.
-     * @return  Built layout with a connected runtime.
-     */
-    public Layout getLayout(Layout.ReplicationMode replicationMode) {
-        addServer(SERVERS.PORT_0);
-        addServer(SERVERS.PORT_1);
-        addServer(SERVERS.PORT_2);
-        addServer(SERVERS.PORT_3);
-        addServer(SERVERS.PORT_4);
+@CorfuTest
+public class LayoutSealTest {
 
-        Layout l = new TestLayoutBuilder()
-                .setEpoch(1)
-                .addLayoutServer(SERVERS.PORT_0)
-                .addLayoutServer(SERVERS.PORT_1)
-                .addLayoutServer(SERVERS.PORT_2)
-                .addSequencer(SERVERS.PORT_0)
-                .buildSegment()
-                .setReplicationMode(replicationMode)
-                .buildStripe()
-                .addLogUnit(SERVERS.PORT_0)
-                .addLogUnit(SERVERS.PORT_1)
-                .addLogUnit(SERVERS.PORT_2)
-                .addToSegment()
-                .buildStripe()
-                .addLogUnit(SERVERS.PORT_3)
-                .addLogUnit(SERVERS.PORT_4)
-                .addToSegment()
-                .addToLayout()
-                .build();
-        bootstrapAllServers(l);
-        CorfuRuntime corfuRuntime = getRuntime(l).connect();
-        l.setRuntime(corfuRuntime);
-        setAggressiveTimeouts(l);
-        return l;
-    }
+    @LayoutProvider("5server-chain")
+    Layout layout5ServerChain = Layout.builder()
+        .layoutServerNode(Servers.SERVER_0.getLocator())
+        .layoutServerNode(Servers.SERVER_1.getLocator())
+        .layoutServerNode(Servers.SERVER_2.getLocator())
+        .sequencerNode(Servers.SERVER_0.getLocator())
+        .segment(LayoutSegment.builder()
+            .replicationMode(ReplicationMode.CHAIN_REPLICATION)
+            .stripe(LayoutStripe.builder()
+                .logServerNode(Servers.SERVER_0.getLocator())
+                .logServerNode(Servers.SERVER_1.getLocator())
+                .logServerNode(Servers.SERVER_2.getLocator())
+                .build())
+            .stripe(LayoutStripe.builder()
+                .logServerNode(Servers.SERVER_3.getLocator())
+                .logServerNode(Servers.SERVER_4.getLocator())
+                .build())
+            .build())
+        .build();
 
-    /**
-     * Sets aggressive timeouts for all test routers.
-     */
-    public void setAggressiveTimeouts(Layout layout) {
-        // Setting aggressive timeouts
-        List<Integer> serverPorts = new ArrayList<>();
-        serverPorts.add(SERVERS.PORT_0);
-        serverPorts.add(SERVERS.PORT_1);
-        serverPorts.add(SERVERS.PORT_2);
-        serverPorts.add(SERVERS.PORT_3);
-        serverPorts.add(SERVERS.PORT_4);
-        List<String> routerEndpoints = new ArrayList<> ();
-        routerEndpoints.add(SERVERS.ENDPOINT_0);
-        routerEndpoints.add(SERVERS.ENDPOINT_1);
-        routerEndpoints.add(SERVERS.ENDPOINT_2);
-        routerEndpoints.add(SERVERS.ENDPOINT_3);
-        routerEndpoints.add(SERVERS.ENDPOINT_4);
-        serverPorts.forEach(serverPort -> {
-            routerEndpoints.forEach(routerEndpoint -> {
-                layout.getRuntime().getRouter(routerEndpoint).setTimeoutConnect(PARAMETERS.TIMEOUT_VERY_SHORT.toMillis());
-                layout.getRuntime().getRouter(routerEndpoint).setTimeoutResponse(PARAMETERS.TIMEOUT_VERY_SHORT.toMillis());
-                layout.getRuntime().getRouter(routerEndpoint).setTimeoutRetry(PARAMETERS.TIMEOUT_VERY_SHORT.toMillis());
-            });
-        });
-    }
 
-    /**
-     * Asserts the Layout Servers Epochs.
-     * Params: Expected epoch values
-     */
-    public void assertLayoutEpochs(long epochLayoutServer0, long epochLayoutServer1, long epochLayoutServer2) {
-        assertThat(getLayoutServer(SERVERS.PORT_0).getServerContext().getServerEpoch()).isEqualTo(epochLayoutServer0);
-        assertThat(getLayoutServer(SERVERS.PORT_1).getServerContext().getServerEpoch()).isEqualTo(epochLayoutServer1);
-        assertThat(getLayoutServer(SERVERS.PORT_2).getServerContext().getServerEpoch()).isEqualTo(epochLayoutServer2);
-    }
-
-    /**
-     * Asserts the Server Router's epochs
-     * Params: Expected epoch values
-     */
-    public void assertServerRouterEpochs(long epochServerRouter0, long epochServerRouter1, long epochServerRouter2, long epochServerRouter3, long epochServerRouter4) {
-        assertThat(getLayoutServer(SERVERS.PORT_0).getServerContext().getServerEpoch()).isEqualTo(epochServerRouter0);
-        assertThat(getLayoutServer(SERVERS.PORT_1).getServerContext().getServerEpoch()).isEqualTo(epochServerRouter1);
-        assertThat(getLayoutServer(SERVERS.PORT_2).getServerContext().getServerEpoch()).isEqualTo(epochServerRouter2);
-        assertThat(getLayoutServer(SERVERS.PORT_3).getServerContext().getServerEpoch()).isEqualTo(epochServerRouter3);
-        assertThat(getLayoutServer(SERVERS.PORT_4).getServerContext().getServerEpoch()).isEqualTo(epochServerRouter4);
-    }
+    @LayoutProvider("5server-quorum")
+    Layout layout5ServerQuorum = Layout.builder()
+        .layoutServerNode(Servers.SERVER_0.getLocator())
+        .layoutServerNode(Servers.SERVER_1.getLocator())
+        .layoutServerNode(Servers.SERVER_2.getLocator())
+        .sequencerNode(Servers.SERVER_0.getLocator())
+        .segment(LayoutSegment.builder()
+            .replicationMode(ReplicationMode.QUORUM_REPLICATION)
+            .stripe(LayoutStripe.builder()
+                .logServerNode(Servers.SERVER_0.getLocator())
+                .logServerNode(Servers.SERVER_1.getLocator())
+                .logServerNode(Servers.SERVER_2.getLocator())
+                .build())
+            .stripe(LayoutStripe.builder()
+                .logServerNode(Servers.SERVER_3.getLocator())
+                .logServerNode(Servers.SERVER_4.getLocator())
+                .build())
+            .build())
+        .build();
 
     /**
      * Scenario: 5 Servers.
      * All working normally and attempted to seal.
      * Seal passes.
      */
-    @Test
-    public void successfulChainSeal() {
-        Layout l = getLayout(Layout.ReplicationMode.CHAIN_REPLICATION);
-        l.setEpoch(l.getEpoch() + 1);
-        try {
-            l.moveServersToEpoch();
-        } catch (QuorumUnreachableException e) {
-            e.printStackTrace();
-        }
-        assertLayoutEpochs(2, 2, 2);
-        assertServerRouterEpochs(2, 2, 2, 2, 2);
+    @CorfuTest
+    public void successfulChainSeal(
+        @Server(value = Servers.SERVER_0, initialLayout = "5server-chain") CorfuServer server0,
+        @Server(value = Servers.SERVER_1, initialLayout = "5server-chain") CorfuServer server1,
+        @Server(value = Servers.SERVER_2, initialLayout = "5server-chain") CorfuServer server2,
+        @Server(value = Servers.SERVER_3, initialLayout = "5server-chain") CorfuServer server3,
+        @Server(value = Servers.SERVER_4, initialLayout = "5server-chain") CorfuServer server4,
+        CorfuRuntime runtime) {
+        Layout newLayout = new Layout(layout5ServerChain);
+        newLayout.setEpoch(2);
+        newLayout.setRuntime(runtime);
+
+        assertThatCode(newLayout::moveServersToEpoch)
+            .doesNotThrowAnyException();;
+
+        assertThat(server0).hasEpoch(2);
+        assertThat(server1).hasEpoch(2);
+        assertThat(server2).hasEpoch(2);
+        assertThat(server3).hasEpoch(2);
+        assertThat(server4).hasEpoch(2);
     }
 
     /**
@@ -134,36 +95,58 @@ public class LayoutSealTest extends AbstractViewTest {
      * Stripe 2: 2 failed, 0 responses.     -   Seal failed
      * Seal failed
      */
-    @Test
-    public void failingChainSeal() {
-        Layout l = getLayout(Layout.ReplicationMode.CHAIN_REPLICATION);
+    @CorfuTest
+    void failingChainSeal(
+        @Server(value = Servers.SERVER_0, initialLayout = "5server-chain") CorfuServer server0,
+        @Server(value = Servers.SERVER_1, initialLayout = "5server-chain") CorfuServer server1,
+        @Server(value = Servers.SERVER_2, initialLayout = "5server-chain") CorfuServer server2,
+        @Server(value = Servers.SERVER_3, initialLayout = "5server-chain") CorfuServer server3,
+        @Server(value = Servers.SERVER_4, initialLayout = "5server-chain") CorfuServer server4,
+        CorfuRuntime runtime) {
+        Layout newLayout = new Layout(layout5ServerChain);
+        newLayout.setEpoch(2);
+        newLayout.setRuntime(runtime);
 
-        addClientRule(l.getRuntime(), SERVERS.ENDPOINT_1, new TestRule().drop().always());
-        addClientRule(l.getRuntime(), SERVERS.ENDPOINT_3, new TestRule().drop().always());
-        addClientRule(l.getRuntime(), SERVERS.ENDPOINT_4, new TestRule().drop().always());
+        disconnectAndBlacklistClientFromServer(runtime, server1);
+        disconnectAndBlacklistClientFromServer(runtime, server3);
+        disconnectAndBlacklistClientFromServer(runtime, server4);
 
-        l.setEpoch(l.getEpoch() + 1);
-        assertThatThrownBy(() -> l.moveServersToEpoch()).isInstanceOf(QuorumUnreachableException.class);
-        assertLayoutEpochs(2, 1, 2);
-        assertServerRouterEpochs(2, 1, 2, 1, 1);
+        assertThatThrownBy(newLayout::moveServersToEpoch)
+            .isInstanceOf(QuorumUnreachableException.class);
+
+        assertThat(server0).hasEpoch(2);
+        assertThat(server1).hasEpoch(1);
+        assertThat(server2).hasEpoch(2);
+        assertThat(server3).hasEpoch(1);
+        assertThat(server4).hasEpoch(1);
     }
+
 
     /**
      * Scenario: 5 Servers.
      * All working normally and attempted to seal.
      * Seal passes.
      */
-    @Test
-    public void successfulQuorumSeal() {
-        Layout l = getLayout(Layout.ReplicationMode.QUORUM_REPLICATION);
-        l.setEpoch(l.getEpoch() + 1);
-        try {
-            l.moveServersToEpoch();
-        } catch (QuorumUnreachableException e) {
-            e.printStackTrace();
-        }
-        assertLayoutEpochs(2, 2, 2);
-        assertServerRouterEpochs(2, 2, 2, 2, 2);
+    @CorfuTest
+    void successfulQuorumSeal(
+        @Server(value = Servers.SERVER_0, initialLayout = "5server-quorum") CorfuServer server0,
+        @Server(value = Servers.SERVER_1, initialLayout = "5server-quorum") CorfuServer server1,
+        @Server(value = Servers.SERVER_2, initialLayout = "5server-quorum") CorfuServer server2,
+        @Server(value = Servers.SERVER_3, initialLayout = "5server-quorum") CorfuServer server3,
+        @Server(value = Servers.SERVER_4, initialLayout = "5server-quorum") CorfuServer server4,
+        CorfuRuntime runtime) {
+        Layout l = new Layout(layout5ServerQuorum);
+        l.setRuntime(runtime);
+        l.setEpoch(2);
+
+        assertThatCode(l::moveServersToEpoch)
+            .doesNotThrowAnyException();
+
+        assertThat(server0).hasEpoch(2);
+        assertThat(server1).hasEpoch(2);
+        assertThat(server2).hasEpoch(2);
+        assertThat(server3).hasEpoch(2);
+        assertThat(server4).hasEpoch(2);
     }
 
     /**
@@ -174,15 +157,27 @@ public class LayoutSealTest extends AbstractViewTest {
      * Stripe 2: 1 failed, 1 response.      -   Seal failed (Quorum not possible)
      * Seal failed
      */
-    @Test
-    public void failingQuorumSeal() {
-        Layout l = getLayout(Layout.ReplicationMode.QUORUM_REPLICATION);
+    @CorfuTest
+    void failingQuorumSeal(
+        @Server(value = Servers.SERVER_0, initialLayout = "5server-quorum") CorfuServer server0,
+        @Server(value = Servers.SERVER_1, initialLayout = "5server-quorum") CorfuServer server1,
+        @Server(value = Servers.SERVER_2, initialLayout = "5server-quorum") CorfuServer server2,
+        @Server(value = Servers.SERVER_3, initialLayout = "5server-quorum") CorfuServer server3,
+        @Server(value = Servers.SERVER_4, initialLayout = "5server-quorum") CorfuServer server4,
+        CorfuRuntime runtime) {
+        Layout newLayout = new Layout(layout5ServerQuorum);
+        newLayout.setEpoch(2);
+        newLayout.setRuntime(runtime);
 
-        addClientRule(l.getRuntime(), SERVERS.ENDPOINT_3, new TestRule().drop().always());
+        disconnectAndBlacklistClientFromServer(runtime, server3);
 
-        l.setEpoch(l.getEpoch() + 1);
-        assertThatThrownBy(() -> l.moveServersToEpoch()).isInstanceOf(QuorumUnreachableException.class);
-        assertLayoutEpochs(2, 2, 2);
-        assertServerRouterEpochs(2, 2, 2, 1, 2);
+        assertThatThrownBy(newLayout::moveServersToEpoch)
+            .isInstanceOf(QuorumUnreachableException.class);
+
+        assertThat(server0).hasEpoch(2);
+        assertThat(server1).hasEpoch(2);
+        assertThat(server2).hasEpoch(2);
+        assertThat(server3).hasEpoch(1);
+        assertThat(server4).hasEpoch(2);
     }
 }

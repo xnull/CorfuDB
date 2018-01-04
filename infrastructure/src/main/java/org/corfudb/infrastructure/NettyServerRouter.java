@@ -4,6 +4,7 @@ import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.annotation.Nonnull;
 
 import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -33,15 +35,18 @@ import org.corfudb.protocols.wireprotocol.CorfuPayloadMsg;
 public class NettyServerRouter extends ChannelInboundHandlerAdapter
         implements IServerRouter {
 
+    @RequiredArgsConstructor
     public static class ServerThreadFactory
             implements ForkJoinPool.ForkJoinWorkerThreadFactory {
 
         public static final String THREAD_PREFIX = "ServerRouter-";
         final AtomicInteger threadNumber = new AtomicInteger(0);
+        final ServerContext context;
 
         public static class ServerWorkerThread extends ForkJoinWorkerThread {
 
-            protected ServerWorkerThread(final ForkJoinPool pool, final String threadName) {
+            protected ServerWorkerThread(@Nonnull final ForkJoinPool pool,
+                                         @Nonnull final String threadName) {
                 super(pool);
                 this.setName(threadName);
                 this.setUncaughtExceptionHandler(NettyServerRouter::handleUncaughtException);
@@ -64,7 +69,8 @@ public class NettyServerRouter extends ChannelInboundHandlerAdapter
         @Override
         public ForkJoinWorkerThread newThread(ForkJoinPool pool) {
             return new ServerWorkerThread(pool,
-                    THREAD_PREFIX + threadNumber.getAndIncrement());
+                    context.getThreadPrefix()
+                        + THREAD_PREFIX + threadNumber.getAndIncrement());
         }
     }
 
@@ -76,10 +82,7 @@ public class NettyServerRouter extends ChannelInboundHandlerAdapter
                 e);
     }
 
-    protected final ExecutorService handlerWorkers =
-            new ForkJoinPool(Runtime.getRuntime().availableProcessors(),
-                    new ServerThreadFactory(),
-                    NettyServerRouter::handleUncaughtException, true);
+    protected final ExecutorService handlerWorkers;
 
     /**
      * This map stores the mapping from message type to netty server handler.
@@ -93,20 +96,32 @@ public class NettyServerRouter extends ChannelInboundHandlerAdapter
     @Setter
     long serverEpoch;
 
-    /** The {@link AbstractServer}s this {@link NettyServerRouter} routes messages for. */
+    /**
+     * The {@link AbstractServer}s this {@link NettyServerRouter} routes messages for.
+     */
     @Getter
-    final List<AbstractServer> servers;
+    final Collection<AbstractServer> servers;
+
+    private final ServerContext serverContext;
 
     /** Construct a new {@link NettyServerRouter}.
      *
      * @param servers   A list of {@link AbstractServer}s this router will route
      *                  messages for.
+     *
+     * @param serverContext   A {@link ServerContext}.
      */
-    public NettyServerRouter(List<AbstractServer> servers) {
+    public NettyServerRouter(@Nonnull Collection<AbstractServer> servers,
+                             @Nonnull ServerContext serverContext) {
         this.servers = servers;
+        this.serverContext = serverContext;
         handlerMap = new EnumMap<>(CorfuMsgType.class);
         servers.forEach(server -> server.getHandler().getHandledTypes()
-            .forEach(x -> handlerMap.put(x, server)));
+                .forEach(x -> handlerMap.put(x, server)));
+        handlerWorkers =
+            new ForkJoinPool(Runtime.getRuntime().availableProcessors(),
+                new ServerThreadFactory(serverContext),
+                NettyServerRouter::handleUncaughtException, true);
     }
 
     /**
@@ -201,6 +216,10 @@ public class NettyServerRouter extends ChannelInboundHandlerAdapter
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         log.error("Error in handling inbound message, {}", cause);
         ctx.close();
+    }
+
+    public void shutdown() {
+        handlerWorkers.shutdownNow();
     }
 
 }

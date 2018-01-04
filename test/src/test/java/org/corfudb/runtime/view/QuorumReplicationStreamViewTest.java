@@ -1,6 +1,7 @@
 package org.corfudb.runtime.view;
 
 import org.corfudb.runtime.clients.SequencerClient;
+import org.corfudb.test.CorfuTest;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -11,7 +12,9 @@ import java.util.Collections;
 /**
  * Created by kspirov
  */
+@CorfuTest
 public class QuorumReplicationStreamViewTest extends StreamViewTest {
+    /*
     @Before
     @Override
     public void setRuntime() throws Exception {
@@ -101,5 +104,5 @@ public class QuorumReplicationStreamViewTest extends StreamViewTest {
             throws Exception {
         super.streamWithHoleFill();
     }
-
+*/
 }

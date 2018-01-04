@@ -5,11 +5,13 @@ import javax.annotation.Nonnull;
 import org.assertj.core.api.AbstractObjectAssert;
 import org.assertj.core.api.AbstractThrowableAssert;
 import org.corfudb.test.DisabledOnTravis;
+
 import org.corfudb.test.concurrent.TestThreadGroups;
 import org.corfudb.test.logging.TestLogger;
 import org.corfudb.util.CFUtils;
 import org.corfudb.util.Sleep;
 import org.corfudb.util.concurrent.SingletonResource;
+
 import org.fusesource.jansi.Ansi;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -152,7 +154,7 @@ public class AbstractCorfuTest {
                                     .a("Warning: test thread could not be killed!").reset());
                                 StackTraceElement[] testTrace = testThread.getStackTrace();
                                 if (testTrace.length > 0) {
-                                    System.out.println(ansi().a("Thread method: ")
+                                    System.out.println(ansi().a("ThreadParameter method: ")
                                         .a(testTrace[0].getClassName())
                                         .a(":")
                                         .a(testTrace[0].getMethodName()));
@@ -183,7 +185,7 @@ public class AbstractCorfuTest {
             System.out.println(ansi().fgCyan().bold().a("Active Threads At Test Failure")
                 .reset());
             System.out.println(ansi().format("%-40s %s",
-                "Thread name", "Method"));
+                "ThreadParameter name", "Method"));
             Map<Thread, StackTraceElement[]> threads = Thread.getAllStackTraces();
             threads.entrySet().forEach(e -> {
                 // Don't print the current thread.

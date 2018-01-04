@@ -1,18 +1,45 @@
 package org.corfudb.runtime.collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.reflect.TypeToken;
 
+import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
+import java.util.stream.IntStream;
 
-import org.assertj.core.data.MapEntry;
-import org.corfudb.runtime.view.AbstractViewTest;
-import org.junit.Test;
-
+import lombok.Data;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.ToString;
 
-public class CorfuTableTest extends AbstractViewTest {
+import org.assertj.core.data.MapEntry;
+import org.corfudb.runtime.CorfuRuntime;
+import org.corfudb.runtime.collections.CorfuTableTest.StringIndexers;
+import org.corfudb.runtime.exceptions.TransactionAbortedException;
+import org.corfudb.runtime.object.ICorfuSMR;
+import org.corfudb.runtime.view.AbstractViewTest;
+import org.corfudb.runtime.view.ObjectOpenOptions;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.util.serializer.Serializers;
+import org.junit.Before;
+import org.junit.Test;
+
+/**
+ * Created by mwei on 1/7/16.
+ */
+@CorfuTest
+public class CorfuTableTest implements IMapTest<CorfuTable> {
 
     @RequiredArgsConstructor
     public enum StringIndexers implements CorfuTable.IndexSpecification<String, String, String, String> {
@@ -25,7 +52,7 @@ public class CorfuTableTest extends AbstractViewTest {
 
         @Getter
         final CorfuTable.ProjectionFunction<String, String, String, String> projectionFunction
-                = (i, s) -> s.map(entry -> entry.getValue());
+            = (i, s) -> s.map(entry -> entry.getValue());
     }
 
     @RequiredArgsConstructor
@@ -38,28 +65,28 @@ public class CorfuTableTest extends AbstractViewTest {
 
         @Getter
         final CorfuTable.ProjectionFunction<String, String, String, String> projectionFunction
-                = (i, s) -> s.map(entry -> entry.getValue());
+            = (i, s) -> s.map(entry -> entry.getValue());
     }
 
 
-    @Test
-    public void openingCorfuTableTwice() {
-        CorfuTable<String, String, StringIndexers, String>
-                instance1 = getDefaultRuntime().getObjectsView().build()
-                .setTypeToken(
-                        new TypeToken<CorfuTable<String, String, StringIndexers, String>>() {})
-                .setArguments(StringIndexers.class)
-                .setStreamName("test")
-                .open();
+    @CorfuTest
+    public void openingCorfuTableTwice(CorfuRuntime runtime) {
+        CorfuTable<String, String, CorfuTableTest.StringIndexers, String>
+            instance1 = runtime.getObjectsView().build()
+            .setTypeToken(
+                new TypeToken<CorfuTable<String, String, CorfuTableTest.StringIndexers, String>>() {})
+            .setArguments(CorfuTableTest.StringIndexers.class)
+            .setStreamName("test")
+            .open();
 
         assertThat(instance1.hasSecondaryIndices()).isTrue();
 
-        CorfuTable<String, String, StringIndexers, String>
-                instance2 = getDefaultRuntime().getObjectsView().build()
-                .setTypeToken(
-                        new TypeToken<CorfuTable<String, String, StringIndexers, String>>() {})
-                .setStreamName("test")
-                .open();
+        CorfuTable<String, String, CorfuTableTest.StringIndexers, String>
+            instance2 = runtime.getObjectsView().build()
+            .setTypeToken(
+                new TypeToken<CorfuTable<String, String, CorfuTableTest.StringIndexers, String>>() {})
+            .setStreamName("test")
+            .open();
 
         // Verify that the first the indexer is set on the first open
         // TODO(Maithem): This might seem like weird semantics, but we
@@ -67,90 +94,90 @@ public class CorfuTableTest extends AbstractViewTest {
         assertThat(instance2.getIndexerClass()).isEqualTo(instance1.getIndexerClass());
     }
 
-    @Test
+    @CorfuTest
     @SuppressWarnings("unchecked")
-    public void canReadFromEachIndex() {
-        CorfuTable<String, String, StringIndexers, String>
-                corfuTable = getDefaultRuntime().getObjectsView().build()
-                    .setTypeToken(
-                            new TypeToken<CorfuTable<String, String, StringIndexers, String>>() {})
-                    .setArguments(StringIndexers.class)
-                    .setStreamName("test")
-                    .open();
+    public void canReadFromEachIndex(CorfuRuntime runtime) {
+        CorfuTable<String, String, CorfuTableTest.StringIndexers, String>
+            corfuTable = runtime.getObjectsView().build()
+            .setTypeToken(
+                new TypeToken<CorfuTable<String, String, CorfuTableTest.StringIndexers, String>>() {})
+            .setArguments(CorfuTableTest.StringIndexers.class)
+            .setStreamName("test")
+            .open();
 
         corfuTable.put("k1", "a");
         corfuTable.put("k2", "ab");
         corfuTable.put("k3", "b");
 
-        assertThat(corfuTable.getByIndex(StringIndexers.BY_FIRST_LETTER, "a"))
-                .containsExactly("a", "ab");
+        assertThat(corfuTable.getByIndex(CorfuTableTest.StringIndexers.BY_FIRST_LETTER, "a"))
+            .containsExactly("a", "ab");
 
-        assertThat(corfuTable.getByIndex(StringIndexers.BY_VALUE, "ab"))
-                .containsExactly("ab");
+        assertThat(corfuTable.getByIndex(CorfuTableTest.StringIndexers.BY_VALUE, "ab"))
+            .containsExactly("ab");
     }
 
 
-    @Test
+    @CorfuTest
     @SuppressWarnings("unchecked")
-    public void emptyIndexesReturnEmptyValues() {
-        CorfuTable<String, String, StringIndexers, String>
-                corfuTable = getDefaultRuntime().getObjectsView().build()
-                .setTypeToken(
-                        new TypeToken<CorfuTable<String, String, StringIndexers, String>>() {})
-                .setArguments(StringIndexers.class)
-                .setStreamName("test")
-                .open();
+    public void emptyIndexesReturnEmptyValues(CorfuRuntime runtime) {
+        CorfuTable<String, String, CorfuTableTest.StringIndexers, String>
+            corfuTable = runtime.getObjectsView().build()
+            .setTypeToken(
+                new TypeToken<CorfuTable<String, String, CorfuTableTest.StringIndexers, String>>() {})
+            .setArguments(CorfuTableTest.StringIndexers.class)
+            .setStreamName("test")
+            .open();
 
 
-        assertThat(corfuTable.getByIndex(StringIndexers.BY_FIRST_LETTER, "a"))
-                .isEmpty();
+        assertThat(corfuTable.getByIndex(CorfuTableTest.StringIndexers.BY_FIRST_LETTER, "a"))
+            .isEmpty();
 
-        assertThat(corfuTable.getByIndex(StringIndexers.BY_VALUE, "ab"))
-                .isEmpty();
+        assertThat(corfuTable.getByIndex(CorfuTableTest.StringIndexers.BY_VALUE, "ab"))
+            .isEmpty();
     }
 
 
-    @Test
+    @CorfuTest
     @SuppressWarnings("unchecked")
-    public void canReadWithoutIndexes() {
+    public void canReadWithoutIndexes(CorfuRuntime runtime) {
         CorfuTable<String, String, CorfuTable.NoSecondaryIndex, Void>
-                corfuTable = getDefaultRuntime().getObjectsView().build()
-                .setTypeToken(
-                        new TypeToken<CorfuTable<String, String,
-                                CorfuTable.NoSecondaryIndex, Void>>() {})
-                .setArguments(StringIndexers.class)
-                .setStreamName("test")
-                .open();
+            corfuTable = runtime.getObjectsView().build()
+            .setTypeToken(
+                new TypeToken<CorfuTable<String, String,
+                    CorfuTable.NoSecondaryIndex, Void>>() {})
+            .setArguments(CorfuTableTest.StringIndexers.class)
+            .setStreamName("test")
+            .open();
 
         corfuTable.put("k1", "a");
         corfuTable.put("k2", "ab");
         corfuTable.put("k3", "b");
 
         assertThat(corfuTable)
-                .containsExactly(MapEntry.entry("k1", "a"),
-                                 MapEntry.entry("k2", "ab"),
-                                 MapEntry.entry("k3", "b"));
+            .containsExactly(MapEntry.entry("k1", "a"),
+                MapEntry.entry("k2", "ab"),
+                MapEntry.entry("k3", "b"));
     }
 
     /**
      * Remove an entry also update indices
      */
-    @Test
-    public void doUpdateIndicesOnRemove() throws Exception {
-        CorfuTable<String, String, StringIndexers, String>
-                corfuTable = getDefaultRuntime().getObjectsView().build()
-                .setTypeToken(CorfuTable.<String, String, StringIndexers, String>getTableType())
-                .setArguments(StringIndexers.class)
-                .setStreamName("test")
-                .open();
+    @CorfuTest
+    public void doUpdateIndicesOnRemove(CorfuRuntime runtime) throws Exception {
+        CorfuTable<String, String, CorfuTableTest.StringIndexers, String>
+            corfuTable = runtime.getObjectsView().build()
+            .setTypeToken(CorfuTable.<String, String, CorfuTableTest.StringIndexers, String>getTableType())
+            .setArguments(CorfuTableTest.StringIndexers.class)
+            .setStreamName("test")
+            .open();
 
         corfuTable.put("k1", "a");
         corfuTable.put("k2", "ab");
         corfuTable.put("k3", "b");
         corfuTable.remove("k2");
 
-        assertThat(corfuTable.getByIndex(StringIndexers.BY_FIRST_LETTER, "a"))
-                .containsExactly("a");
+        assertThat(corfuTable.getByIndex(CorfuTableTest.StringIndexers.BY_FIRST_LETTER, "a"))
+            .containsExactly("a");
     }
 
 }

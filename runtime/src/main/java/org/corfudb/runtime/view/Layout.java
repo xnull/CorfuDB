@@ -18,11 +18,15 @@ import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 
 import javax.annotation.Nullable;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Builder.Default;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
+import lombok.Singular;
 import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 
@@ -39,6 +43,7 @@ import org.corfudb.runtime.view.replication.QuorumReplicationProtocol;
 import org.corfudb.runtime.view.replication.ReadWaitHoleFillPolicy;
 import org.corfudb.runtime.view.stream.BackpointerStreamView;
 import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.util.NodeLocator;
 
 /**
  * This class represents the layout of a Corfu instance.
@@ -48,6 +53,8 @@ import org.corfudb.runtime.view.stream.IStreamView;
 @Data
 @ToString(exclude = {"runtime"})
 @EqualsAndHashCode
+@Builder
+@AllArgsConstructor
 public class Layout {
     /**
      * A Gson parser.
@@ -60,28 +67,28 @@ public class Layout {
      * A list of layout servers in the layout.
      */
     @Getter
-    List<String> layoutServers;
+    @Singular List<String> layoutServers;
     /**
      * A list of sequencers in the layout.
      */
     @Getter
-    List<String> sequencers;
+    @Singular List<String> sequencers;
     /**
      * A list of the segments in the layout.
      */
     @Getter
-    List<LayoutSegment> segments;
+    @Singular List<LayoutSegment> segments;
     /**
      * A list of unresponsive nodes in the layout.
      */
     @Getter
-    List<String> unresponsiveServers;
+    @Singular List<String> unresponsiveServers;
     /**
      * The epoch of this layout.
      */
     @Getter
     @Setter
-    long epoch;
+    @Default long epoch = 0;
 
     /**
      * The org.corfudb.runtime this layout is associated with.
@@ -95,7 +102,20 @@ public class Layout {
      *  {@code null} in a legacy layout.
      */
     @Getter
-    UUID clusterId;
+    @Default UUID clusterId = null;
+
+    public static class LayoutBuilder {
+
+        public LayoutBuilder layoutServerNode(@Nonnull NodeLocator locator) {
+            layoutServer(locator.toString());
+            return this;
+        }
+
+        public LayoutBuilder sequencerNode(@Nonnull NodeLocator locator) {
+            sequencer(locator.toString());
+            return this;
+        }
+    }
 
     /**
      * Defensive constructor since we can create a Layout from a JSON file.
@@ -503,26 +523,27 @@ public class Layout {
     @Data
     @Getter
     @Setter
+    @Builder
     public static class LayoutSegment {
         /**
          * The replication mode of the segment.
          */
-        ReplicationMode replicationMode;
+        @Default ReplicationMode replicationMode = ReplicationMode.CHAIN_REPLICATION;
 
         /**
          * The address the layout segment starts at. (included in the segment)
          */
-        long start;
+        @Default long start = 0;
 
         /**
          * The address the layout segment ends at. (excluded from the segment)
          */
-        long end;
+        @Default long end = -1;
 
         /**
          * A list of log servers for this segment.
          */
-        List<LayoutStripe> stripes;
+        @Singular List<LayoutStripe> stripes;
 
         /**
          * Constructor Layout Segment, contiguous partition in a Corfu Log.
@@ -551,8 +572,16 @@ public class Layout {
 
     @Data
     @Getter
+    @Builder
     public static class LayoutStripe {
-        final List<String> logServers;
+        @Singular final List<String> logServers;
+
+        public static class LayoutStripeBuilder {
+            public LayoutStripeBuilder logServerNode(NodeLocator locator) {
+                logServer(locator.toString());
+                return this;
+            }
+        }
 
         public LayoutStripe(@NonNull List<String> logServers) {
             this.logServers = logServers;

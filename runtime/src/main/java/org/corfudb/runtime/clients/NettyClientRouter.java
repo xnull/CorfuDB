@@ -3,6 +3,7 @@ package org.corfudb.runtime.clients;
 import com.codahale.metrics.Counter;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
+
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
@@ -14,9 +15,13 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.DefaultChannelPromise;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
+
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
 import io.netty.handler.ssl.SslContext;
+import io.netty.util.concurrent.GlobalEventExecutor;
+
+
 import io.netty.util.concurrent.GlobalEventExecutor;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -24,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +40,8 @@ import javax.net.ssl.SSLException;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+
+import org.corfudb.comm.ChannelImplementation;
 import org.corfudb.protocols.wireprotocol.ClientHandshakeHandler;
 import org.corfudb.protocols.wireprotocol.ClientHandshakeHandler.ClientHandshakeEvent;
 import org.corfudb.protocols.wireprotocol.CorfuMsg;
@@ -44,6 +52,7 @@ import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.CorfuRuntime.CorfuRuntimeParameters;
 import org.corfudb.runtime.exceptions.NetworkException;
 import org.corfudb.runtime.exceptions.ShutdownException;
+
 import org.corfudb.runtime.exceptions.WrongEpochException;
 import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuError;
 import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuInterruptedError;
@@ -53,6 +62,7 @@ import org.corfudb.security.tls.SslContextConstructor;
 import org.corfudb.util.CFUtils;
 import org.corfudb.util.MetricsUtils;
 import org.corfudb.util.NodeLocator;
+import org.corfudb.util.NodeLocator.Protocol;
 import org.corfudb.util.Sleep;
 
 
@@ -185,7 +195,7 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
      * specified tls and sasl options. The new {@link this} will attempt connection to
      * the node until {@link this#stop()} is called.
      *
-     * @param node           The node to connect to.
+     * @param node           The node to connectAsync to.
      * @param eventLoopGroup The {@link EventLoopGroup} for servicing I/O.
      * @param parameters     A {@link CorfuRuntimeParameters} with the desired configuration.
      */
@@ -211,6 +221,7 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
         MetricRegistry metrics = CorfuRuntime.getDefaultMetrics();
 
         String pfx = CorfuRuntime.getMpCR() + node + ".";
+
         timerConnect = metrics.timer(pfx + "connectAsync");
         timerSyncOp = metrics.timer(pfx + "sync-op");
         counterSendDisconnected = metrics.counter(pfx + "send-disconnected");
@@ -228,7 +239,6 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
         }
 
         addClient(new BaseClient());
-
 
         // Initialize the channel
         shutdown = false;

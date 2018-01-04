@@ -34,6 +34,7 @@ public class ClientHandshakeHandler extends ChannelDuplexHandler {
     private final Queue<CorfuMsg> messages = new ArrayDeque();
     private static final String READ_TIMEOUT_HANDLER = "readTimeoutHandler";
 
+
     /** Events that the handshaker sends to downstream handlers.
      *
      */
@@ -186,7 +187,7 @@ public class ClientHandshakeHandler extends ChannelDuplexHandler {
      */
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx,
-        java.lang.Throwable cause) throws Exception {
+        Throwable cause) throws Exception {
         log.error("exceptionCaught: Exception {} caught.", cause.getClass().getSimpleName(), cause);
         if (cause instanceof ReadTimeoutException) {
             // Handshake has failed or completed. If none is True, handshake timed out.

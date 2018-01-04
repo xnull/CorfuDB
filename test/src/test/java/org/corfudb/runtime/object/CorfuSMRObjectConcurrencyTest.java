@@ -1,5 +1,12 @@
 package org.corfudb.runtime.object;
 
+import java.time.Duration;
+import org.corfudb.runtime.CorfuRuntime;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.concurrent.ConcurrentScheduler;
+import org.corfudb.test.parameters.CorfuObjectParameter;
+import org.corfudb.test.parameters.Param;
+import org.corfudb.test.parameters.Parameter;
 import org.junit.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -7,34 +14,37 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Created by dmalkhi on 12/4/16.
  */
-public class CorfuSMRObjectConcurrencyTest extends AbstractObjectTest {
-    @Test
-    public void testCorfuSharedCounterConcurrentReads() throws Exception {
-        getDefaultRuntime();
+@CorfuTest
+public class CorfuSMRObjectConcurrencyTest {
+
+    @CorfuTest
+    public void testCorfuSharedCounterConcurrentReads(CorfuRuntime runtime,
+            ConcurrentScheduler scheduler,
+            @CorfuObjectParameter(stream = "test") CorfuSharedCounter sharedCounter,
+            @Parameter(Param.CONCURRENCY_SOME) int concurrency,
+            @Parameter(Param.NUM_ITERATIONS_LOW) int writerwork,
+            @Parameter(Param.TIMEOUT_LONG) Duration timeout
+        ) throws Exception {
 
         final int COUNTER_INITIAL = 55;
 
-        CorfuSharedCounter sharedCounter = (CorfuSharedCounter)
-                instantiateCorfuObject(CorfuSharedCounter.class, "test");
-
         sharedCounter.setValue(COUNTER_INITIAL);
 
-        int concurrency = PARAMETERS.CONCURRENCY_SOME * 2;
-        int writeconcurrency = PARAMETERS.CONCURRENCY_SOME;
-        int writerwork = PARAMETERS.NUM_ITERATIONS_LOW;
+        int readconcurrency =concurrency * 2;
 
         sharedCounter.setValue(-1);
         assertThat(sharedCounter.getValue())
                 .isEqualTo(-1);
 
-        scheduleConcurrently(writeconcurrency, t -> {
+        scheduler.schedule(concurrency, t -> {
                     for (int i = 0; i < writerwork; i++)
                         sharedCounter.setValue(t*writerwork + i);
                 }
         );
-        scheduleConcurrently(concurrency-writeconcurrency, t -> {
+
+        scheduler.schedule(readconcurrency-concurrency, t -> {
                     int lastread = -1;
-                    for (int i = 0; i < PARAMETERS.NUM_ITERATIONS_LOW; i++) {
+                    for (int i = 0; i < writerwork; i++) {
                         int res = sharedCounter.getValue();
                         boolean assertflag =
                                 (
@@ -46,7 +56,8 @@ public class CorfuSMRObjectConcurrencyTest extends AbstractObjectTest {
                     }
                 }
         );
-        executeScheduled(concurrency, PARAMETERS.TIMEOUT_LONG);
+
+        scheduler.execute(readconcurrency, timeout);
 
     }
 }

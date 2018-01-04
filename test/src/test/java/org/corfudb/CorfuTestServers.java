@@ -36,32 +36,32 @@ public class CorfuTestServers {
     public final int PORT_9 = 9;
 
     /** The endpoint name for test server 0. */
-    public final String ENDPOINT_0 = "test:" + PORT_0;
+    public final String ENDPOINT_0 = "local://test:" + PORT_0;
 
     /** The endpoint name for test server 1. */
-    public final String ENDPOINT_1 = "test:" + PORT_1;
+    public final String ENDPOINT_1 = "local://test:" + PORT_1;
 
     /** The endpoint name for test server 2. */
-    public final String ENDPOINT_2 = "test:" + PORT_2;
+    public final String ENDPOINT_2 = "local://test:" + PORT_2;
 
     /** The endpoint name for test server 3. */
-    public final String ENDPOINT_3 = "test:" + PORT_3;
+    public final String ENDPOINT_3 = "local://test:" + PORT_3;
 
     /** The endpoint name for test server 4. */
-    public final String ENDPOINT_4 = "test:" + PORT_4;
+    public final String ENDPOINT_4 = "local://test:" + PORT_4;
 
     /** The endpoint name for test server 5. */
-    public final String ENDPOINT_5 = "test:" + PORT_5;
+    public final String ENDPOINT_5 = "local://test:" + PORT_5;
 
     /** The endpoint name for test server 6. */
-    public final String ENDPOINT_6 = "test:" + PORT_6;
+    public final String ENDPOINT_6 = "local://test:" + PORT_6;
 
     /** The endpoint name for test server 7. */
-    public final String ENDPOINT_7 = "test:" + PORT_7;
+    public final String ENDPOINT_7 = "local://test:" + PORT_7;
 
     /** The endpoint name for test server 8. */
-    public final String ENDPOINT_8 = "test:" + PORT_8;
+    public final String ENDPOINT_8 = "local://test:" + PORT_8;
 
     /** The endpoint name for test server 9. */
-    public final String ENDPOINT_9 = "test:" + PORT_9;
+    public final String ENDPOINT_9 = "local://test:" + PORT_9;
 }

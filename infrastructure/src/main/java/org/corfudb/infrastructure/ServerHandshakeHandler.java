@@ -11,6 +11,7 @@ import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.UUID;
 
+import javax.annotation.Nonnull;
 import lombok.extern.slf4j.Slf4j;
 
 import org.corfudb.protocols.wireprotocol.CorfuMsg;
@@ -19,6 +20,7 @@ import org.corfudb.protocols.wireprotocol.CorfuPayloadMsg;
 import org.corfudb.protocols.wireprotocol.HandshakeMsg;
 import org.corfudb.protocols.wireprotocol.HandshakeResponse;
 import org.corfudb.protocols.wireprotocol.HandshakeState;
+import org.corfudb.util.UuidUtils;
 
 /**
  * The ServerHandshakeHandler waits for the handshake message, validates and sends
@@ -33,8 +35,9 @@ public class ServerHandshakeHandler extends ChannelDuplexHandler {
     private final String corfuVersion;
     private final HandshakeState state;
     private final int timeoutInSeconds;
+    private final ServerContext context;
     private final Queue<CorfuMsg> messages = new ArrayDeque();
-    private static final  AttributeKey<UUID> clientIdAttrKey = AttributeKey.valueOf("ClientID");
+    public static final  AttributeKey<UUID> CLIENT_ID = AttributeKey.valueOf("ClientID");
     private static final String READ_TIMEOUT_HANDLER = "readTimeoutHandler";
 
 
@@ -45,11 +48,15 @@ public class ServerHandshakeHandler extends ChannelDuplexHandler {
      * @param nodeId Current Server Node Identifier.
      * @param corfuVersion Version of Corfu in Server Node.
      */
-    public ServerHandshakeHandler(UUID nodeId, String corfuVersion, String timeoutInSeconds) {
+    public ServerHandshakeHandler(@Nonnull UUID nodeId,
+                                  @Nonnull String corfuVersion,
+                                  @Nonnull ServerContext context) {
         this.nodeId = nodeId;
         this.corfuVersion = corfuVersion;
-        this.timeoutInSeconds = Integer.parseInt(timeoutInSeconds);
+        this.timeoutInSeconds = Integer.parseInt(
+            context.getServerConfig(String.class, "--HandshakeTimeout"));
         this.state = new HandshakeState();
+        this.context = context;
     }
 
     /**
@@ -107,17 +114,27 @@ public class ServerHandshakeHandler extends ChannelDuplexHandler {
         if (serverId.equals(UUID.fromString("00000000-0000-0000-0000-000000000000"))) {
             log.info("channelRead: node id matching is not requested by client.");
         } else if (!serverId.equals(this.nodeId)) {
-            log.error("channelRead: Invalid handshake: this is " + this.nodeId +
-                    " and client is trying to connect to " + serverId);
+            log.error("channelRead: Invalid handshake: this is " + this.nodeId
+                    + " and client is trying to connect to " + serverId);
             this.fireHandshakeFailed(ctx);
             return;
         }
 
         // Store clientID as a channel attribute.
-        ctx.channel().attr(clientIdAttrKey).set(clientId);
+        ctx.channel().attr(CLIENT_ID).set(clientId);
+
+        // If the clientID is blacklisted, cancel the connection and disconnect the client
+        if (context.getBlacklistedClients().contains(clientId)) {
+            log.warn("channelRead: Client {} is blacklisted. Disconnecting.",
+                    UuidUtils.asBase64(clientId));
+            ctx.channel().disconnect();
+            this.fireHandshakeFailed(ctx);
+            return;
+        }
+
         log.info("channelRead: Handshake validated by Server.");
-        log.debug("channelRead: Sending handshake response: Node Id: " + this.nodeId +
-                " Corfu Version: " + this.corfuVersion);
+        log.debug("channelRead: Sending handshake response: Node Id: " + this.nodeId
+                + " Corfu Version: " + this.corfuVersion);
 
         CorfuMsg handshakeResponse = CorfuMsgType.HANDSHAKE_RESPONSE
                 .payloadMsg(new HandshakeResponse(this.nodeId, this.corfuVersion));

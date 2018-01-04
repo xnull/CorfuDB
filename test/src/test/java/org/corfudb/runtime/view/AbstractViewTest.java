@@ -33,6 +33,7 @@ import org.corfudb.runtime.clients.ManagementClient;
 import org.corfudb.runtime.clients.SequencerClient;
 import org.corfudb.runtime.clients.TestClientRouter;
 import org.corfudb.runtime.clients.TestRule;
+import org.corfudb.util.CFUtils;
 import org.corfudb.util.NodeLocator;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -90,6 +91,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
         CorfuRuntime.overrideGetRouterFunction = this::getRouterFunction;
         runtime = CorfuRuntime.fromParameters(CorfuRuntimeParameters.builder()
             .nettyEventLoop(NETTY_EVENT_LOOP)
+            .shutdownNettyEventLoop(false)
             .build());
         // Default number of times to read before hole filling to 0
         // (most aggressive, to surface concurrency issues).
@@ -106,6 +108,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
 
     public CorfuRuntime getNewRuntime(@Nonnull CorfuRuntimeParameters parameters) {
         parameters.setNettyEventLoop(NETTY_EVENT_LOOP);
+        parameters.setShutdownNettyEventLoop(false);
         return CorfuRuntime.fromParameters(parameters);
     }
 
@@ -130,18 +133,21 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
      */
     protected IClientRouter getRouterFunction(CorfuRuntime runtime, String endpoint) {
         runtimeRouterMap.putIfAbsent(runtime, new ConcurrentHashMap<>());
-        if (!endpoint.startsWith("test:")) {
-            throw new RuntimeException("Unsupported endpoint in test: " + endpoint);
-        }
-        return runtimeRouterMap.get(runtime).computeIfAbsent(endpoint,
+        NodeLocator locator = NodeLocator.parseString(endpoint);
+        final String legacyEndpoint = locator.getHost() + ":" + locator.getPort();
+        return runtimeRouterMap.get(runtime).computeIfAbsent(legacyEndpoint,
                 x -> {
+                    TestServer server = testServerMap.computeIfAbsent(legacyEndpoint,
+                        s -> new TestServer(Integer.valueOf(legacyEndpoint.split(":")[1])
+                        ));
                     TestClientRouter tcn =
-                            new TestClientRouter(testServerMap.get(endpoint).getServerRouter());
+                            new TestClientRouter(server.getServerRouter());
                     tcn.addClient(new BaseClient())
                             .addClient(new SequencerClient())
                             .addClient(new LayoutClient())
                             .addClient(new LogUnitClient())
                             .addClient(new ManagementClient());
+                    runtime.nodeRouters.put(legacyEndpoint, tcn);
                     return tcn;
                 }
         );
@@ -285,7 +291,8 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
                             .handleMessage(CorfuMsgType.MANAGEMENT_BOOTSTRAP_REQUEST.payloadMsg(l),
                                     null, e.getValue().serverRouter);
                 });
-        TestServer primarySequencerNode = testServerMap.get(l.getSequencers().get(0));
+        NodeLocator locator = NodeLocator.parseString(l.getSequencers().get(0));
+        TestServer primarySequencerNode = testServerMap.get(locator.getHost() + ":" + locator.getPort());
         primarySequencerNode.sequencerServer
                 .handleMessage(CorfuMsgType.BOOTSTRAP_SEQUENCER.payloadMsg(new SequencerTailsRecoveryMsg(0L,
                         Collections.EMPTY_MAP, l.getEpoch())), null, primarySequencerNode.serverRouter);
@@ -296,9 +303,9 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
      * @return  A default CorfuRuntime
      */
     public CorfuRuntime getDefaultRuntime() {
-        if (!testServerMap.containsKey(getEndpoint(SERVERS.PORT_0))) {
-            addSingleServer(SERVERS.PORT_0);
-        }
+        testServerMap.computeIfAbsent(getEndpoint(SERVERS.PORT_0),
+            s -> new TestServer(SERVERS.PORT_0)
+            );
         return getRuntime().connect();
     }
 
@@ -313,7 +320,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
                     .setDaemon(true)
                     .setUncaughtExceptionHandler((thread, throwable) -> {
                         assertThat(false)
-                            .as("Thread " + thread.getName()
+                            .as("ThreadParameter " + thread.getName()
                                 + " unexpectedly terminated with "
                                 + throwable.getClass().getSimpleName())
                             .isTrue();
@@ -379,7 +386,10 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
      * @param rule                  The rule to install.
      */
     public void addClientRule(CorfuRuntime r, String clientRouterEndpoint, TestRule rule) {
-        runtimeRouterMap.get(r).get(clientRouterEndpoint).rules.add(rule);
+        final NodeLocator locator = NodeLocator.parseString(clientRouterEndpoint);
+        runtimeRouterMap.get(r).entrySet().stream()
+            .filter(e -> locator.isSameNode(e.getKey()))
+            .findAny().get().getValue().rules.add(rule);
     }
 
     /** Clear rules for a particular server.

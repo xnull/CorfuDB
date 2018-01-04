@@ -1,6 +1,7 @@
 package org.corfudb.runtime.view;
 
 import com.google.common.reflect.TypeToken;
+import java.time.Duration;
 import org.corfudb.protocols.logprotocol.LogEntry;
 import org.corfudb.protocols.logprotocol.MultiObjectSMREntry;
 import org.corfudb.protocols.logprotocol.MultiSMREntry;
@@ -10,6 +11,11 @@ import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.collections.SMRMap;
 import org.corfudb.runtime.exceptions.TransactionAbortedException;
 import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.concurrent.ConcurrentScheduler;
+import org.corfudb.test.parameters.CorfuObjectParameter;
+import org.corfudb.test.parameters.Param;
+import org.corfudb.test.parameters.Parameter;
 import org.corfudb.util.serializer.Serializers;
 import org.junit.Test;
 
@@ -19,12 +25,14 @@ import java.util.Map;
 import java.util.concurrent.Semaphore;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Created by mwei on 2/18/16.
  */
-public class ObjectsViewTest extends AbstractViewTest {
+@CorfuTest
+public class ObjectsViewTest {
 
     public static boolean referenceTX(Map<String, String> smrMap) {
         smrMap.put("a", "b");
@@ -33,13 +41,9 @@ public class ObjectsViewTest extends AbstractViewTest {
         return true;
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void canCopyObject()
+    @CorfuTest
+    public void canCopyObject(CorfuRuntime r)
             throws Exception {
-        //begin tests
-        CorfuRuntime r = getDefaultRuntime();
-
         Map<String, String> smrMap = r.getObjectsView().build()
                                                     .setStreamName("map a")
                                                     .setTypeToken(new TypeToken<SMRMap<String, String>>() {})
@@ -60,50 +64,33 @@ public class ObjectsViewTest extends AbstractViewTest {
                 .doesNotContainEntry("b", "b");
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void cannotCopyNonCorfuObject()
+    @CorfuTest
+    public void cannotCopyNonCorfuObject(CorfuRuntime r)
             throws Exception {
-        //begin tests
-        CorfuRuntime r = getDefaultRuntime();
-
         assertThatThrownBy(() -> {
             r.getObjectsView().copy(new HashMap<String, String>(), CorfuRuntime.getStreamID("test"));
         }).isInstanceOf(RuntimeException.class);
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void canAbortNoTransaction()
+    @CorfuTest
+    public void canAbortNoTransaction(CorfuRuntime r)
             throws Exception {
-        //begin tests
-        CorfuRuntime r = getDefaultRuntime();
         r.getObjectsView().TXAbort();
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void abortedTransactionDoesNotConflict()
+    @CorfuTest
+    public void abortedTransactionDoesNotConflict(CorfuRuntime r,
+        ConcurrentScheduler scheduler,
+        @CorfuObjectParameter(stream="map a") SMRMap<String, String> map,
+        @CorfuObjectParameter(stream="map a", options = {ObjectOpenOptions.NO_CACHE})
+            SMRMap<String, String> mapCopy,
+        @Parameter(Param.TIMEOUT_LONG) Duration timeout)
             throws Exception {
         final String mapA = "map a";
         //Enbale transaction logging
-        CorfuRuntime r = getDefaultRuntime()
-                .setTransactionLogging(true);
-
-        SMRMap<String, String> map = getDefaultRuntime().getObjectsView()
-                .build()
-                .setStreamName(mapA)
-                .setTypeToken(new TypeToken<SMRMap<String, String>>() {})
-                .open();
+        r.setTransactionLogging(true);
 
         // TODO: fix so this does not require mapCopy.
-        SMRMap<String, String> mapCopy = getDefaultRuntime().getObjectsView()
-                .build()
-                .setStreamName(mapA)
-                .setTypeToken(new TypeToken<SMRMap<String, String>>() {})
-                .addOption(ObjectOpenOptions.NO_CACHE)
-                .open();
-
 
         map.put("initial", "value");
 
@@ -115,26 +102,27 @@ public class ObjectsViewTest extends AbstractViewTest {
         // the second starts a transaction, waits for the first tx to read
         // and commits.
         // The first thread then resumes and attempts to commit. It should abort.
-        scheduleConcurrently(1, t -> {
+        scheduler.schedule(1, t -> {
             assertThatThrownBy(() -> {
-                getRuntime().getObjectsView().TXBegin();
+                r.getObjectsView().TXBegin();
                 map.get("k");
                 s1.release();   // Let thread 2 start.
                 s2.acquire();   // Wait for thread 2 to commit.
                 map.put("k", "v1");
-                getRuntime().getObjectsView().TXEnd();
+                r.getObjectsView().TXEnd();
             }).isInstanceOf(TransactionAbortedException.class);
         });
 
-        scheduleConcurrently(1, t -> {
-            s1.acquire();   // Wait for thread 1 to read
-            getRuntime().getObjectsView().TXBegin();
+        scheduler.schedule(1, t -> {
+            assertThatCode(s1::acquire)
+                    .doesNotThrowAnyException();// Wait for thread 1 to read
+            r.getObjectsView().TXBegin();
             mapCopy.put("k", "v2");
-            getRuntime().getObjectsView().TXEnd();
+            r.getObjectsView().TXEnd();
             s2.release();
         });
 
-        executeScheduled(2, PARAMETERS.TIMEOUT_LONG);
+        scheduler.execute(2, timeout);
 
         // The result should contain T2s modification.
         assertThat(map)
@@ -144,11 +132,11 @@ public class ObjectsViewTest extends AbstractViewTest {
                 .TRANSACTION_STREAM_ID);
         List<ILogData> txns = txStream.remainingUpTo(Long.MAX_VALUE);
         assertThat(txns).hasSize(1);
-        assertThat(txns.get(0).getLogEntry(getRuntime()).getType())
+        assertThat(txns.get(0).getLogEntry(r).getType())
                 .isEqualTo(LogEntry.LogEntryType.MULTIOBJSMR);
 
         MultiObjectSMREntry tx1 = (MultiObjectSMREntry)txns.get(0).getLogEntry
-                (getRuntime());
+                (r);
         MultiSMREntry entryMap = tx1.getEntryMap().get(CorfuRuntime.getStreamID(mapA));
         assertThat(entryMap).isNotNull();
 
@@ -161,17 +149,10 @@ public class ObjectsViewTest extends AbstractViewTest {
         assertThat((String) args[1]).isEqualTo("v2");
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void unrelatedStreamDoesNotConflict()
+    @CorfuTest
+    public void unrelatedStreamDoesNotConflict(CorfuRuntime r,
+        @CorfuObjectParameter(stream="map a") SMRMap<String, String> smrMap)
             throws Exception {
-        //begin tests
-        CorfuRuntime r = getDefaultRuntime();
-
-        Map<String, String> smrMap = r.getObjectsView().build()
-                .setStreamName("map a")
-                .setTypeToken(new TypeToken<SMRMap<String, String>>() {})
-                .open();
 
         IStreamView streamB = r.getStreamsView().get(CorfuRuntime.getStreamID("b"));
         smrMap.put("a", "b");
@@ -189,23 +170,11 @@ public class ObjectsViewTest extends AbstractViewTest {
                 .containsEntry("b", "b");
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void unrelatedTransactionDoesNotConflict()
+    @CorfuTest
+    public void unrelatedTransactionDoesNotConflict(CorfuRuntime r,
+        @CorfuObjectParameter(stream="map a") SMRMap<String, String> smrMap,
+        @CorfuObjectParameter(stream="map b") SMRMap<String, String> smrMapB)
             throws Exception {
-        //begin tests
-        CorfuRuntime r = getDefaultRuntime();
-
-        Map<String, String> smrMap = r.getObjectsView().build()
-                .setStreamName("map a")
-                .setTypeToken(new TypeToken<SMRMap<String, String>>() {})
-                .open();
-
-        Map<String, String> smrMapB = r.getObjectsView().build()
-                .setStreamName("map b")
-                .setTypeToken(new TypeToken<SMRMap<String, String>>() {})
-                .open();
-
         smrMap.put("a", "b");
 
         r.getObjectsView().TXBegin();

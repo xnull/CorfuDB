@@ -7,15 +7,17 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import org.apache.xerces.impl.dv.util.Base64;
+import org.corfudb.test.CorfuTest;
 import org.junit.Test;
 import static org.junit.Assert.fail;
 
+@CorfuTest
 public class ReloadableTrustManagerTest {
     private String PASSWORD_FILE = "src/test/resources/security/reload/password";
     private String CLIENT_CERT = "src/test/resources/security/reload/client.cert";
     private String SERVER_CERT = "src/test/resources/security/reload/server.cert";
 
-    @Test
+    @CorfuTest
     public void testServerCheckClient() throws Exception {
         ReloadableTrustManager manager = new ReloadableTrustManager(
                 "src/test/resources/security/reload/server_trust_with_client.jks", PASSWORD_FILE);
@@ -25,7 +27,7 @@ public class ReloadableTrustManagerTest {
         manager.checkClientTrusted(new X509Certificate[]{cert}, "RSA");
     }
 
-    @Test
+    @CorfuTest
     public void testServerCheckClientFail() throws Exception {
         ReloadableTrustManager manager = new ReloadableTrustManager(
                 "src/test/resources/security/reload/server_trust_no_client.jks", PASSWORD_FILE);
@@ -40,7 +42,7 @@ public class ReloadableTrustManagerTest {
         }
     }
 
-    @Test
+    @CorfuTest
     public void testClientCheckServer() throws Exception {
         ReloadableTrustManager manager = new ReloadableTrustManager(
                 "src/test/resources/security/reload/client_trust_with_server.jks", PASSWORD_FILE);
@@ -50,7 +52,7 @@ public class ReloadableTrustManagerTest {
         manager.checkServerTrusted(new X509Certificate[]{cert}, "RSA");
     }
 
-    @Test
+    @CorfuTest
     public void testClientCheckServerFail() throws Exception {
         ReloadableTrustManager manager = new ReloadableTrustManager(
                 "src/test/resources/security/reload/client_trust_no_server.jks", PASSWORD_FILE);

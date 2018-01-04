@@ -2,164 +2,174 @@ package org.corfudb.runtime.view;
 
 import com.google.common.collect.ContiguousSet;
 import com.google.common.collect.DiscreteDomain;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Range;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.corfudb.infrastructure.CorfuServer;
+import org.corfudb.infrastructure.LogUnitServer;
 import org.corfudb.infrastructure.LogUnitServerAssertions;
 import org.corfudb.infrastructure.TestLayoutBuilder;
 import org.corfudb.protocols.wireprotocol.*;
 import org.corfudb.runtime.CorfuRuntime;
+import org.corfudb.runtime.view.Layout.LayoutSegment;
+import org.corfudb.runtime.view.Layout.LayoutStripe;
+import org.corfudb.runtime.view.Layout.ReplicationMode;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.parameters.LayoutProvider;
+import org.corfudb.test.parameters.Server;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.corfudb.test.parameters.Servers.SERVER_0;
+import static org.corfudb.test.parameters.Servers.SERVER_1;
+import static org.corfudb.test.parameters.Servers.SERVER_2;
 
 /**
  * Created by mwei on 2/1/16.
  */
-public class AddressSpaceViewTest extends AbstractViewTest {
+@CorfuTest
+public class AddressSpaceViewTest {
 
-    @Before
-    public void setup(){
-        addServer(SERVERS.PORT_0);
-        addServer(SERVERS.PORT_1);
-        addServer(SERVERS.PORT_2);
+    @LayoutProvider("3 Stripe Layout")
+    final Layout layout3NodeStriped = Layout.builder()
+        .layoutServerNode(SERVER_0.getLocator())
+        .sequencerNode(SERVER_0.getLocator())
+        .segment(LayoutSegment.builder()
+            .replicationMode(ReplicationMode.CHAIN_REPLICATION)
+            .stripe(LayoutStripe.builder()
+                .logServerNode(SERVER_0.getLocator())
+                .build())
+            .stripe(LayoutStripe.builder()
+                .logServerNode(SERVER_1.getLocator())
+                .build())
+            .stripe(LayoutStripe.builder()
+                .logServerNode(SERVER_2.getLocator())
+                .build())
+            .build()
+        )
+        .build();
 
-        //configure the layout accordingly
-        bootstrapAllServers(new TestLayoutBuilder()
-                .setEpoch(1L)
-                .addLayoutServer(SERVERS.PORT_0)
-                .addSequencer(SERVERS.PORT_0)
-                .buildSegment()
-                .buildStripe()
-                .addLogUnit(SERVERS.PORT_0)
-                .addToSegment()
-                .buildStripe()
-                .addLogUnit(SERVERS.PORT_1)
-                .addToSegment()
-                .buildStripe()
-                .addLogUnit(SERVERS.PORT_2)
-                .addToSegment()
-                .addToLayout()
-                .build());
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    public void ensureStripingWorks()
+    @CorfuTest
+    public void ensureStripingWorks(
+        @Server(value = SERVER_0, initialLayout = "3 Stripe Layout")
+        CorfuServer server0,
+        @Server(value = SERVER_1, initialLayout = "3 Stripe Layout")
+        CorfuServer server1,
+        @Server(value = SERVER_2, initialLayout = "3 Stripe Layout")
+        CorfuServer server2,
+        CorfuRuntime runtime)
             throws Exception {
-        CorfuRuntime r = getRuntime().connect();
-
         UUID streamA = UUID.nameUUIDFromBytes("stream A".getBytes());
         byte[] testPayload = "hello world".getBytes();
 
-        final long epoch = r.getLayoutView().getLayout().getEpoch();
+        TokenResponse token0 = runtime.getSequencerView()
+                        .nextToken(Collections.singleton(streamA), 1);
 
-        r.getAddressSpaceView().write(new TokenResponse(0, epoch,
-                        Collections.singletonMap(streamA, Address.NO_BACKPOINTER)),
-                "hello world".getBytes());
+        runtime.getAddressSpaceView().write(token0, "hello world".getBytes());
 
-        assertThat(r.getAddressSpaceView().read(0L).getPayload(getRuntime()))
+        assertThat(runtime.getAddressSpaceView().read(token0.getTokenValue()).getPayload(runtime))
                 .isEqualTo("hello world".getBytes());
 
-        assertThat(r.getAddressSpaceView().read(0L).containsStream(streamA))
+        assertThat(runtime.getAddressSpaceView().read(token0.getTokenValue()).containsStream(streamA))
                 .isTrue();
 
-        // Ensure that the data was written to each logunit.
-        LogUnitServerAssertions.assertThat(getLogUnit(SERVERS.PORT_0))
-                .matchesDataAtAddress(0, testPayload);
-        LogUnitServerAssertions.assertThat(getLogUnit(SERVERS.PORT_1))
-                .isEmptyAtAddress(0);
-        LogUnitServerAssertions.assertThat(getLogUnit(SERVERS.PORT_2))
-                .isEmptyAtAddress(0);
+        // Ensure that the data was written to the correct stripe
+        List<CorfuServer> servers = ImmutableList.<CorfuServer>builder()
+                                            .add(server0)
+                                            .add(server1)
+                                            .add(server2)
+                                            .build();
 
-        r.getAddressSpaceView().write(new TokenResponse(1, epoch,
-                        Collections.singletonMap(streamA, Address.NO_BACKPOINTER)),
-                "1".getBytes());
-        LogUnitServerAssertions.assertThat(getLogUnit(SERVERS.PORT_0))
-                .matchesDataAtAddress(0, testPayload);
-        LogUnitServerAssertions.assertThat(getLogUnit(SERVERS.PORT_1))
-                .matchesDataAtAddress(1, "1".getBytes());
-        LogUnitServerAssertions.assertThat(getLogUnit(SERVERS.PORT_2))
-                .isEmptyAtAddress(0);
+        int write0Stripe = (int) token0.getTokenValue() % servers.size();
+        LogUnitServerAssertions.assertThat(servers.get(write0Stripe).getServer(LogUnitServer.class))
+                .matchesDataAtAddress(token0.getTokenValue(), testPayload);
+
+        TokenResponse token1 = runtime.getSequencerView()
+            .nextToken(Collections.singleton(streamA), 1);
+
+
+        runtime.getAddressSpaceView().write(token1, "1".getBytes());
+
+        // Ensure next data was written to the correct stripe.
+        int write1Stripe = (int) token1.getTokenValue() %  servers.size();
+        LogUnitServerAssertions.assertThat(servers.get(write1Stripe).getServer(LogUnitServer.class))
+            .matchesDataAtAddress(token1.getTokenValue(), "1".getBytes());
     }
 
-    @Test
-    public void testGetTrimMark() {
-        CorfuRuntime r = getRuntime().connect();
-        assertThat(r.getAddressSpaceView().getTrimMark()).isEqualTo(0);
+    @CorfuTest
+    public void testGetTrimMark(CorfuRuntime runtime) {
+        assertThat(runtime.getAddressSpaceView().getTrimMark()).isEqualTo(0);
         final long trimAddress = 10;
 
-        r.getAddressSpaceView().prefixTrim(trimAddress);
-        assertThat(r.getAddressSpaceView().getTrimMark()).isEqualTo(trimAddress + 1);
+        runtime.getAddressSpaceView().prefixTrim(trimAddress);
+        assertThat(runtime.getAddressSpaceView().getTrimMark()).isEqualTo(trimAddress + 1);
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void ensureStripingReadAllWorks()
+    @CorfuTest
+    public void ensureStripingReadAllWorks(
+        @Server(value = SERVER_0, initialLayout = "3 Stripe Layout")
+        CorfuServer server0,
+        @Server(value = SERVER_1, initialLayout = "3 Stripe Layout")
+            CorfuServer server1,
+        @Server(value = SERVER_2, initialLayout = "3 Stripe Layout")
+            CorfuServer server2,
+        CorfuRuntime runtime)
             throws Exception {
         //configure the layout accordingly
-        CorfuRuntime r = getRuntime().connect();
+        final TokenResponse token0 = runtime.getSequencerView()
+            .nextToken(Collections.emptySet(), 1);
+        final TokenResponse token1 = runtime.getSequencerView()
+            .nextToken(Collections.emptySet(), 1);
+        final TokenResponse token2 = runtime.getSequencerView()
+            .nextToken(Collections.emptySet(), 1);
 
-        byte[] testPayload = "hello world".getBytes();
+        runtime.getAddressSpaceView().write(token0, "hello world".getBytes());
+        runtime.getAddressSpaceView().write(token1, "1".getBytes());
+        runtime.getAddressSpaceView().write(token2, "3".getBytes());
 
-        final long ADDRESS_0 = 0;
-        final long ADDRESS_1 = 1;
-        final long ADDRESS_2 = 3;
-        Token token = new Token(ADDRESS_0, r.getLayoutView().getLayout().getEpoch());
-        r.getAddressSpaceView().write(token, testPayload);
+        List<Long> rs = Stream.of(token0, token1, token2)
+            .map(TokenResponse::getTokenValue)
+            .collect(Collectors.toList());
 
-        assertThat(r.getAddressSpaceView().read(ADDRESS_0).getPayload(getRuntime()))
+        Map<Long, ILogData> m = runtime.getAddressSpaceView().read(rs);
+
+        assertThat(m.get(token0.getTokenValue()).getPayload(runtime))
                 .isEqualTo("hello world".getBytes());
-
-
-        r.getAddressSpaceView().write(new Token(ADDRESS_1, r.getLayoutView().getLayout().getEpoch()),
-                "1".getBytes());
-
-        r.getAddressSpaceView().write(new Token(ADDRESS_2, r.getLayoutView().getLayout().getEpoch()),
-                "3".getBytes());
-
-        List<Long> rs = new ArrayList<>();
-        rs.add(ADDRESS_0);
-        rs.add(ADDRESS_1);
-        rs.add(ADDRESS_2);
-
-        Map<Long, ILogData> m = r.getAddressSpaceView().read(rs);
-
-        assertThat(m.get(ADDRESS_0).getPayload(getRuntime()))
-                .isEqualTo("hello world".getBytes());
-        assertThat(m.get(ADDRESS_1).getPayload(getRuntime()))
+        assertThat(m.get(token1.getTokenValue()).getPayload(runtime))
                 .isEqualTo("1".getBytes());
-        assertThat(m.get(ADDRESS_2).getPayload(getRuntime()))
+        assertThat(m.get(token2.getTokenValue()).getPayload(runtime))
                 .isEqualTo("3".getBytes());
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void readAllWithHoleFill()
+    @CorfuTest
+    public void readAllWithHoleFill(CorfuRuntime runtime)
             throws Exception {
         //configure the layout accordingly
-        CorfuRuntime r = getRuntime().connect();
 
         byte[] testPayload = "hello world".getBytes();
 
-        final long ADDRESS_0 = 0;
-        final long ADDRESS_1 = 1;
-        final long ADDRESS_2 = 3;
-        Token token = new Token(ADDRESS_0, r.getLayoutView().getLayout().getEpoch());
-        r.getAddressSpaceView().write(token, testPayload);
+        final TokenResponse token0 = runtime.getSequencerView()
+            .nextToken(Collections.emptySet(), 1);
+        final TokenResponse token1 = runtime.getSequencerView()
+            .nextToken(Collections.emptySet(), 1);
+        final TokenResponse token2 = runtime.getSequencerView()
+            .nextToken(Collections.emptySet(), 1);
 
-        assertThat(r.getAddressSpaceView().read(ADDRESS_0).getPayload(getRuntime()))
-                .isEqualTo("hello world".getBytes());
+        runtime.getAddressSpaceView().write(token0, testPayload);
 
-        Range range = Range.closed(ADDRESS_0, ADDRESS_2);
+        Range range = Range.closed(token0.getTokenValue(), token2.getTokenValue());
         ContiguousSet<Long> addresses = ContiguousSet.create(range, DiscreteDomain.longs());
 
-        Map<Long, ILogData> m = r.getAddressSpaceView().read(addresses);
+        Map<Long, ILogData> m = runtime.getAddressSpaceView().read(addresses);
 
-        assertThat(m.get(ADDRESS_0).getPayload(getRuntime()))
+        assertThat(m.get(token0.getTokenValue()).getPayload(runtime))
                 .isEqualTo("hello world".getBytes());
-        assertThat(m.get(ADDRESS_1).isHole());
-        assertThat(m.get(ADDRESS_2).isHole());
+        assertThat(m.get(token1.getTokenValue()).isHole());
+        assertThat(m.get(token2.getTokenValue()).isHole());
     }
 }

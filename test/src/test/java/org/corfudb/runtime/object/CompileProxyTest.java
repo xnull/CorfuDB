@@ -1,9 +1,17 @@
 package org.corfudb.runtime.object;
 
 import com.google.common.reflect.TypeToken;
+import java.time.Duration;
+import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.collections.SMRMap;
 import org.corfudb.runtime.object.transactions.TransactionalContext;
 import org.corfudb.runtime.view.AbstractViewTest;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.concurrent.ConcurrentScheduler;
+import org.corfudb.test.concurrent.ConcurrentStateMachine;
+import org.corfudb.test.parameters.CorfuObjectParameter;
+import org.corfudb.test.parameters.Param;
+import org.corfudb.test.parameters.Parameter;
 import org.junit.Test;
 
 import java.util.Collections;
@@ -14,25 +22,28 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.corfudb.test.parameters.Param.CONCURRENCY_LOTS;
+import static org.corfudb.test.parameters.Param.CONCURRENCY_SOME;
+import static org.corfudb.test.parameters.Param.NUM_ITERATIONS_LOW;
+import static org.corfudb.test.parameters.Param.NUM_ITERATIONS_MODERATE;
+import static org.corfudb.test.parameters.Param.RANDOM_SEED;
+import static org.corfudb.test.parameters.Param.TIMEOUT_NORMAL;
+import static org.corfudb.test.parameters.Param.TIMEOUT_SHORT;
 
 /**
  * Created by mwei on 11/11/16.
  */
-public class CompileProxyTest extends AbstractViewTest {
+@CorfuTest
+public class CompileProxyTest {
     
-    @Test
-    public void testObjectMapSimple() throws Exception {
-
-        Map<String, String> map = getDefaultRuntime()
-                                    .getObjectsView().build()
-                                    .setStreamName("my stream")
-                                    .setTypeToken(new TypeToken<SMRMap<String,String>>() {})
-                                    .open();
-
-        getDefaultRuntime().getObjectsView().TXBegin();
+    @CorfuTest
+    public void testObjectMapSimple(CorfuRuntime runtime,
+                                    @CorfuObjectParameter(stream = "my stream")
+                                        SMRMap<String, String> map) throws Exception {
+        runtime.getObjectsView().TXBegin();
         map.put("hello", "world");
         map.put("hell", "world");
-        getDefaultRuntime().getObjectsView().TXEnd();
+        runtime.getObjectsView().TXEnd();
 
         assertThat(map)
                 .containsEntry("hello", "world");
@@ -40,15 +51,10 @@ public class CompileProxyTest extends AbstractViewTest {
                 .containsEntry("hell", "world");
     }
 
-    @Test
-    public void testObjectCounterSimple() throws Exception {
-        CorfuSharedCounter sharedCounter = getDefaultRuntime()
-                .getObjectsView().build()
-                .setStreamName("my stream")
-                .setTypeToken(new TypeToken<CorfuSharedCounter>() {
-                })
-                .open();
-
+    @CorfuTest
+    public void testObjectCounterSimple(CorfuRuntime runtime,
+        @CorfuObjectParameter(stream = "my stream")
+            CorfuSharedCounter sharedCounter) throws Exception {
         final int VALUE = 33;
         sharedCounter.setValue(VALUE);
         assertThat(sharedCounter.getValue())
@@ -62,15 +68,14 @@ public class CompileProxyTest extends AbstractViewTest {
      *
      * @throws Exception
      */
-    @Test
-    public void testObjectCounterWriteConcurrency() throws Exception {
-        CorfuSharedCounter sharedCounter = getDefaultRuntime()
-                .getObjectsView().build()
-                .setStreamName("my stream")
-                .setTypeToken(new TypeToken<CorfuSharedCounter>() {
-                })
-                .open();
-        final int concurrency = PARAMETERS.CONCURRENCY_LOTS;
+    @CorfuTest
+    public void testObjectCounterWriteConcurrency(CorfuRuntime runtime,
+                                        ConcurrentScheduler scheduler,
+                                        @CorfuObjectParameter(stream = "my stream")
+                                        CorfuSharedCounter sharedCounter,
+                                        @Parameter(CONCURRENCY_LOTS) int concurrency,
+                                        @Parameter(TIMEOUT_NORMAL) Duration timeout)
+        throws Exception {
         final int INITIAL = -1;
 
         sharedCounter.setValue(INITIAL);
@@ -79,10 +84,8 @@ public class CompileProxyTest extends AbstractViewTest {
 
         // schedule 'concurrency' number of threads,
         // each one sets the shared counter value to its thread index
-        scheduleConcurrently(concurrency, t ->
-                sharedCounter.setValue(t)
-        );
-        executeScheduled(concurrency, PARAMETERS.TIMEOUT_NORMAL);
+        scheduler.schedule(concurrency, sharedCounter::setValue);
+        scheduler.execute(concurrency, timeout);
 
         // track the raw stream updates caused by the execution so far
         ICorfuSMR<CorfuSharedCounter> compiledSharedCounter = (ICorfuSMR<CorfuSharedCounter>) sharedCounter;
@@ -118,26 +121,25 @@ public class CompileProxyTest extends AbstractViewTest {
      * The test invokes CorfuSharedCounter::CAS by 'concurrency' number of concurrent threads.
      * @throws Exception
      */
-    @Test
-    public void testObjectCounterCASConcurrency() throws Exception {
-    CorfuSharedCounter sharedCounter = getDefaultRuntime()
-            .getObjectsView().build()
-            .setStreamName("my stream")
-            .setTypeToken(new TypeToken<CorfuSharedCounter>() {
-            })
-            .open();
-        int concurrency = PARAMETERS.CONCURRENCY_LOTS;
+    @CorfuTest
+    public void testObjectCounterCASConcurrency(CorfuRuntime runtime,
+                                    @CorfuObjectParameter(stream = "my stream")
+                                    CorfuSharedCounter sharedCounter,
+                                    ConcurrentScheduler scheduler,
+                                    @Parameter(CONCURRENCY_LOTS) int concurrency,
+                                    @Parameter(TIMEOUT_NORMAL) Duration timeout) throws Exception {
         final int INITIAL = -1;
 
         sharedCounter.setValue(INITIAL);
 
         // concurrency invoke CAS by multiple threads
         AtomicInteger casSucceeded = new AtomicInteger(0);
-        scheduleConcurrently(concurrency, t -> {
-                    if (sharedCounter.CAS(INITIAL, t) == INITIAL)
-                        casSucceeded.incrementAndGet();
+        scheduler.schedule(concurrency, t -> {
+            if (sharedCounter.CAS(INITIAL, t) == INITIAL) {
+                casSucceeded.incrementAndGet();
+            }
         });
-        executeScheduled(concurrency, PARAMETERS.TIMEOUT_SHORT);
+        scheduler.execute(concurrency, timeout);
 
         // check that exactly one CAS succeeded
         assertThat(sharedCounter.getValue())
@@ -155,17 +157,16 @@ public class CompileProxyTest extends AbstractViewTest {
      *
      * @throws Exception
      */
-    @Test
-    public void testObjectCounterReadConcurrency() throws Exception {
-        CorfuSharedCounter sharedCounter = getDefaultRuntime()
-                .getObjectsView().build()
-                .setStreamName("my stream")
-                .setTypeToken(new TypeToken<CorfuSharedCounter>() {
-                })
-                .open();
-
-        int numTasks = PARAMETERS.NUM_ITERATIONS_LOW;
-        Random r = new Random(PARAMETERS.SEED);
+    @CorfuTest
+    public void testObjectCounterReadConcurrency(CorfuRuntime runtime,
+                                                 ConcurrentStateMachine stateMachine,
+                                                 @CorfuObjectParameter(stream = "my stream")
+                                                 CorfuSharedCounter sharedCounter,
+                                                 @Parameter(CONCURRENCY_SOME) int concurrency,
+                                                 @Parameter(NUM_ITERATIONS_LOW) int numTasks,
+                                                 @Parameter(RANDOM_SEED) long seed)
+        throws Exception {
+        Random r = new Random(seed);
 
         sharedCounter.setValue(-1);
         AtomicInteger lastUpdate = new AtomicInteger(-1);
@@ -174,7 +175,7 @@ public class CompileProxyTest extends AbstractViewTest {
                 .isEqualTo(lastUpdate.get());
 
         // only one step: randomly choose between read/append of the shared counter
-        addTestStep ((task_num) -> {
+        stateMachine.addStep ((task_num) -> {
             if (r.nextBoolean()) {
                 sharedCounter.setValue(task_num);
                 lastUpdate.set(task_num); // remember the last written value
@@ -184,7 +185,7 @@ public class CompileProxyTest extends AbstractViewTest {
         } );
 
         // invoke the interleaving engine
-        scheduleInterleaved(PARAMETERS.CONCURRENCY_SOME, PARAMETERS.CONCURRENCY_SOME*numTasks);
+        stateMachine.executeInterleaved(concurrency, concurrency *numTasks);
     }
 
     /**
@@ -198,21 +199,20 @@ public class CompileProxyTest extends AbstractViewTest {
      * @throws Exception
      */
 
-    @Test
-    public void testObjectCounterConcurrencyStream() throws Exception {
-        CorfuSharedCounter sharedCounter = getDefaultRuntime()
-                .getObjectsView().build()
-                .setStreamName("my stream")
-                .setTypeToken(new TypeToken<CorfuSharedCounter>() {
-                })
-                .open();
-
+    @CorfuTest
+    public void testObjectCounterConcurrencyStream(CorfuRuntime runtime,
+                                                    ConcurrentStateMachine stateMachine,
+                                                    @CorfuObjectParameter(stream = "my stream")
+                                                    CorfuSharedCounter sharedCounter,
+                                                    @Parameter(CONCURRENCY_SOME) int concurrency,
+                                                    @Parameter(NUM_ITERATIONS_LOW) int numTasks,
+                                                    @Parameter(RANDOM_SEED) long seed
+                                                    ) throws Exception {
         ICorfuSMR<CorfuSharedCounter> compiledSharedCounter = (ICorfuSMR<CorfuSharedCounter>)  sharedCounter;
         ICorfuSMRProxyInternal<CorfuSharedCounter> proxy_CORFUSMR = (ICorfuSMRProxyInternal<CorfuSharedCounter>) compiledSharedCounter.getCorfuSMRProxy();
       //  IStreamView objStream = proxy_CORFUSMR.getUnderlyingObject().getStreamViewUnsafe();
 
-        int numTasks = PARAMETERS.NUM_ITERATIONS_LOW;
-        Random r = new Random(PARAMETERS.SEED);
+        Random r = new Random(seed);
 
         final int INITIAL = -1;
 
@@ -228,7 +228,7 @@ public class CompileProxyTest extends AbstractViewTest {
         // build a state-machine:
 
         // only one step: randomly choose between read/append of the shared counter
-        addTestStep((task_num) -> {
+        stateMachine.addStep((task_num) -> {
 
             if (r.nextBoolean()) {
                 sharedCounter.setValue(task_num);
@@ -253,7 +253,7 @@ public class CompileProxyTest extends AbstractViewTest {
 
 
         // invoke the interleaving engine
-        scheduleInterleaved(PARAMETERS.CONCURRENCY_SOME, PARAMETERS.CONCURRENCY_SOME*numTasks);
+        stateMachine.executeInterleaved(concurrency, concurrency * numTasks);
     }
 
 
@@ -264,27 +264,24 @@ public class CompileProxyTest extends AbstractViewTest {
      *
      * @throws Exception
      */
-    @Test
-    public void testCorfuMapConcurrency() throws Exception {
-
-        Map<String, String> map = getDefaultRuntime()
-                .getObjectsView().build()
-                .setStreamName("my stream")
-                .setTypeToken(new TypeToken<SMRMap<String, String>>() {
-                })
-                .open();
-        int concurrency = PARAMETERS.CONCURRENCY_LOTS;
-
+    @CorfuTest
+    public void testCorfuMapConcurrency(CorfuRuntime runtime,
+                                        ConcurrentScheduler scheduler,
+                                        @CorfuObjectParameter(stream = "my stream")
+                                        SMRMap<String, String> map,
+                                        @Parameter(CONCURRENCY_LOTS) int concurrency,
+                                        @Parameter(TIMEOUT_SHORT) Duration timeout)
+        throws Exception {
         // Blocking until sequencer becomes functional.
-        getDefaultRuntime().getSequencerView().nextToken(Collections.EMPTY_SET, 0);
+        runtime.getSequencerView().nextToken(Collections.EMPTY_SET, 0);
 
         // schedule 'concurrency' number of threads,
         // each one put()'s a key with its thread index
 
-        scheduleConcurrently(concurrency, t -> {
+        scheduler.schedule(concurrency, t -> {
             map.put(Integer.toString(t), "world");
         });
-        executeScheduled(concurrency, PARAMETERS.TIMEOUT_SHORT);
+        scheduler.execute(concurrency, timeout);
 
         // check that map contains keys with every thread index
         for (int i = 0; i < concurrency; i++)
@@ -304,14 +301,10 @@ public class CompileProxyTest extends AbstractViewTest {
      *
      * @throws Exception
      */
-    @Test
-    public void testObjectCompoundSimple() throws Exception {
-        CorfuCompoundObj sharedCorfuCompound = getDefaultRuntime()
-                .getObjectsView().build()
-                .setStreamName("my stream")
-                .setTypeToken(new TypeToken<CorfuCompoundObj>() {
-                })
-                .open();
+    @CorfuTest
+    public void testObjectCompoundSimple(CorfuRuntime runtime,
+                                         @CorfuObjectParameter(stream = "my stream")
+                                         CorfuCompoundObj sharedCorfuCompound) throws Exception {
 
         final int TESTVALUE = 33;
         sharedCorfuCompound.set(sharedCorfuCompound.new Inner("A", "B"), TESTVALUE);
@@ -331,25 +324,23 @@ public class CompileProxyTest extends AbstractViewTest {
      *
      * @throws Exception
      */
-    @Test
-    public void testObjectCompoundWriteConcurrency() throws Exception {
-        CorfuCompoundObj sharedCorfuCompound = getDefaultRuntime()
-                .getObjectsView().build()
-                .setStreamName("my stream")
-                .setTypeToken(new TypeToken<CorfuCompoundObj>() {
-                })
-                .open();
-
-        int concurrency = PARAMETERS.CONCURRENCY_LOTS;
+    @CorfuTest
+    public void testObjectCompoundWriteConcurrency(CorfuRuntime runtime,
+                                                    ConcurrentScheduler scheduler,
+                                                    @CorfuObjectParameter(stream = "my stream")
+                                                    CorfuCompoundObj sharedCorfuCompound,
+                                                    @Parameter(CONCURRENCY_LOTS) int concurrency,
+                                                    @Parameter(TIMEOUT_SHORT) Duration timeout)
+        throws Exception {
 
         // Block until sequencer operational.
-        getDefaultRuntime().getSequencerView().nextToken(Collections.EMPTY_SET, 0);
+        runtime.getSequencerView().nextToken(Collections.EMPTY_SET, 0);
 
         // set up 'concurrency' number of threads that concurrency update sharedCorfuCompound, each to a different value
-        scheduleConcurrently(concurrency, t -> {
+        scheduler.schedule(concurrency, t -> {
             sharedCorfuCompound.set(sharedCorfuCompound.new Inner("A"+t, "B"+t), t);
         });
-        executeScheduled(concurrency, PARAMETERS.TIMEOUT_SHORT);
+        scheduler.execute(concurrency, timeout);
 
         // sanity checks on the final value of sharedCorfuCompound
         assertThat(sharedCorfuCompound.getID())
@@ -377,15 +368,13 @@ public class CompileProxyTest extends AbstractViewTest {
      *
      * @throws Exception
      */
-    @Test
-    public void testObjectCompoundWriteConcurrencyStream() throws Exception {
-        CorfuCompoundObj sharedCorfuCompound = getDefaultRuntime()
-                .getObjectsView().build()
-                .setStreamName("my stream")
-                .setTypeToken(new TypeToken<CorfuCompoundObj>() {
-                })
-                .open();
-
+    @CorfuTest
+    public void testObjectCompoundWriteConcurrencyStream(CorfuRuntime runtime,
+        ConcurrentStateMachine stateMachine,
+        @CorfuObjectParameter(stream = "my stream")
+            CorfuCompoundObj sharedCorfuCompound,
+        @Parameter(NUM_ITERATIONS_MODERATE) int iterations,
+        @Parameter(CONCURRENCY_SOME) int concurrency) throws Exception {
         // for tracking raw stream status
         ICorfuSMR<CorfuCompoundObj> compiledCorfuCompound = (ICorfuSMR<CorfuCompoundObj>) sharedCorfuCompound;
         ICorfuSMRProxyInternal<CorfuCompoundObj> proxy_CORFUSMR = (ICorfuSMRProxyInternal<CorfuCompoundObj>) compiledCorfuCompound.getCorfuSMRProxy();
@@ -401,12 +390,12 @@ public class CompileProxyTest extends AbstractViewTest {
         // build a state-machine:
 
         // step 1: update the shared compound to task-specific value
-        addTestStep((task_num) -> {
+        stateMachine.addStep((task_num) -> {
             sharedCorfuCompound.set(sharedCorfuCompound.new Inner("C" + task_num, "D" + task_num), task_num);
         });
 
         // step 2: check the unsync'ed in-memory object state
-        addTestStep((ignored_task_num) -> {
+        stateMachine.addStep((ignored_task_num) -> {
             // before sync'ing the in-memory object, the in-memory copy does not get updated
             assertThat(proxy_CORFUSMR.getUnderlyingObject().object.getUser().getFirstName())
                     .startsWith("E");
@@ -415,7 +404,7 @@ public class CompileProxyTest extends AbstractViewTest {
         });
 
         // invoke the interleaving engine
-        scheduleInterleaved(PARAMETERS.CONCURRENCY_SOME, PARAMETERS.NUM_ITERATIONS_MODERATE);
+        stateMachine.executeInterleaved(concurrency, iterations);
 
         assertThat(sharedCorfuCompound.getUser().getFirstName())
                 .startsWith("C");

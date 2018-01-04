@@ -7,6 +7,8 @@ import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.clients.LogUnitClient;
 import org.corfudb.runtime.exceptions.OverwriteException;
 import org.corfudb.runtime.view.Layout;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.parameters.Servers;
 import org.junit.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -16,55 +18,31 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * Created by mwei on 4/11/17.
  */
-public class ChainReplicationProtocolTest extends AbstractReplicationProtocolTest {
+@CorfuTest
+public class ChainReplicationProtocolTest implements
+                IReplicationProtocolTest<ChainReplicationProtocol> {
 
-    /** {@inheritDoc} */
     @Override
-    IReplicationProtocol getProtocol() {
-        return new
-                ChainReplicationProtocol(new
-                AlwaysHoleFillPolicy());
-    }
-
-    /** {@inheritDoc} */
-    @Override
-    void setupNodes() {
-        addServer(SERVERS.PORT_0);
-        addServer(SERVERS.PORT_1);
-        addServer(SERVERS.PORT_2);
-
-        bootstrapAllServers(new TestLayoutBuilder()
-                .addLayoutServer(SERVERS.PORT_0)
-                .addSequencer(SERVERS.PORT_0)
-                .buildSegment()
-                .setReplicationMode(Layout.ReplicationMode.CHAIN_REPLICATION)
-                .buildStripe()
-                .addLogUnit(SERVERS.PORT_0)
-                .addLogUnit(SERVERS.PORT_1)
-                .addLogUnit(SERVERS.PORT_2)
-                .addToSegment()
-                .addToLayout()
-                .build());
+    public ChainReplicationProtocol getProtocol() {
+        return new ChainReplicationProtocol(new AlwaysHoleFillPolicy());
     }
 
     /** Check to see that a writer correctly
      * completes a failed write from another client.
      */
-    @Test
-    public void failedWriteIsPropagated()
+    @CorfuTest
+    void failedWriteIsPropagated(CorfuRuntime runtime)
             throws Exception {
-        setupNodes();
-        //begin tests
-        final CorfuRuntime r = getDefaultRuntime();
-        final IReplicationProtocol rp = getProtocol();
-        final Layout layout = r.getLayoutView().getLayout();
+        final ChainReplicationProtocol rp = getProtocol();
+        final Layout layout = runtime.getLayoutView().getLayout();
 
         LogData failedWrite = getLogData(0, "failed".getBytes());
         LogData incompleteWrite = getLogData(0, "incomplete".getBytes());
 
         // Write the incomplete write to the head of the chain
-        r.getRouter(SERVERS.ENDPOINT_0).getClient(LogUnitClient.class)
-                .write(incompleteWrite);
+        runtime.getRouter(Servers.SERVER_0.getLocator().toString())
+                .getClient(LogUnitClient.class)
+                .write(incompleteWrite).join();
 
         // Attempt to write using the replication protocol.
         // Should result in an overwrite exception
@@ -73,10 +51,11 @@ public class ChainReplicationProtocolTest extends AbstractReplicationProtocolTes
 
         // At this point, a direct read of the tail should
         // reflect the -other- clients value
-        ILogData readResult = r.getRouter(SERVERS.ENDPOINT_0).getClient(LogUnitClient.class)
+        ILogData readResult = runtime
+                .getRouter(Servers.SERVER_0.getLocator().toString()).getClient(LogUnitClient.class)
                 .read(0).get().getAddresses().get(0L);
 
-        assertThat(readResult.getPayload(r))
+        assertThat(readResult.getPayload(runtime))
             .isEqualTo("incomplete".getBytes());
     }
 
@@ -84,26 +63,23 @@ public class ChainReplicationProtocolTest extends AbstractReplicationProtocolTes
     /** Check to see that a read correctly
      * completes a failed write from another client.
      */
-    @Test
-    public void failedWriteCanBeRead()
+    @CorfuTest
+    void failedWriteCanBeRead(CorfuRuntime runtime)
             throws Exception {
-        setupNodes();
-        //begin tests
-        final CorfuRuntime r = getDefaultRuntime();
-        final IReplicationProtocol rp = getProtocol();
-        final Layout layout = r.getLayoutView().getLayout();
+        final ChainReplicationProtocol rp = getProtocol();
+        final Layout layout = runtime.getLayoutView().getLayout();
 
         LogData incompleteWrite = getLogData(0, "incomplete".getBytes());
 
         // Write the incomplete write to the head of the chain
-        r.getRouter(SERVERS.ENDPOINT_0).getClient(LogUnitClient.class)
-                .write(incompleteWrite);
+        runtime.getRouter(Servers.SERVER_0.getLocator().toString()).getClient(LogUnitClient.class)
+                .write(incompleteWrite).join();
 
         // At this point, a read
         // reflect the -other- clients value
         ILogData readResult = rp.read(layout, 0);
 
-        assertThat(readResult.getPayload(r))
+        assertThat(readResult.getPayload(runtime))
                 .isEqualTo("incomplete".getBytes());
     }
 }

@@ -5,18 +5,22 @@ import com.google.common.collect.ImmutableMap;
 import java.util.UUID;
 
 import org.corfudb.AbstractCorfuTest;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.parameters.Param;
+import org.corfudb.test.parameters.Parameter;
 import org.junit.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.corfudb.test.parameters.Param.TEST_TEMP_DIR;
 
 /**
  * Created by mdhawan on 7/29/16.
  */
-public class DataStoreTest extends AbstractCorfuTest {
+@CorfuTest
+public class DataStoreTest {
 
-    @Test
-    public void testPutGet() {
-        String serviceDir = PARAMETERS.TEST_TEMP_DIR;
+    @CorfuTest
+    public void testPutGet(@Parameter(TEST_TEMP_DIR) String serviceDir) {
         DataStore dataStore = new DataStore(new ImmutableMap.Builder<String, Object>()
                 .put("--log-path", serviceDir)
                 .build());
@@ -28,9 +32,8 @@ public class DataStoreTest extends AbstractCorfuTest {
         assertThat(dataStore.get(String.class, "test", "key")).isEqualTo("NEW_VALUE");
     }
 
-    @Test
-    public void testPutGetWithRestart() {
-        String serviceDir = PARAMETERS.TEST_TEMP_DIR;
+    @CorfuTest
+    public void testPutGetWithRestart(@Parameter(TEST_TEMP_DIR) String serviceDir) {
         DataStore dataStore = new DataStore(new ImmutableMap.Builder<String, Object>()
                 .put("--log-path", serviceDir)
                 .build());
@@ -47,9 +50,8 @@ public class DataStoreTest extends AbstractCorfuTest {
         assertThat(dataStore.get(String.class, "test", "key")).isEqualTo("NEW_VALUE");
     }
 
-    @Test
-    public void testDatastoreEviction() {
-        String serviceDir = PARAMETERS.TEST_TEMP_DIR;
+    @CorfuTest
+    public void testDatastoreEviction(@Parameter(TEST_TEMP_DIR) String serviceDir) {
         DataStore dataStore = new DataStore(new ImmutableMap.Builder<String, Object>()
                 .put("--log-path", serviceDir)
                 .build());
@@ -68,9 +70,8 @@ public class DataStoreTest extends AbstractCorfuTest {
         }
     }
 
-    @Test
-    public void testInmemoryPutGet() {
-        String serviceDir = PARAMETERS.TEST_TEMP_DIR;
+    @CorfuTest
+    public void testInmemoryPutGet(@Parameter(TEST_TEMP_DIR) String serviceDir) {
         DataStore dataStore = new DataStore(new ImmutableMap.Builder<String, Object>()
                 .put("--memory", true)
                 .build());
@@ -83,9 +84,8 @@ public class DataStoreTest extends AbstractCorfuTest {
 
     }
 
-    @Test
-    public void testInmemoryEviction() {
-        String serviceDir = PARAMETERS.TEST_TEMP_DIR;
+    @CorfuTest
+    public void testInmemoryEviction(@Parameter(TEST_TEMP_DIR) String serviceDir) {
         DataStore dataStore = new DataStore(new ImmutableMap.Builder<String, Object>()
                 .put("--memory", true)
                 .build());

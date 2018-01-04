@@ -49,7 +49,7 @@ public class SMRMultiLogunitTest extends AbstractViewTest {
     }
 
     /**
-     * Single Thread.
+     * Single ThreadParameter.
      * Test a read after write on SMRMap.
      */
     @Test
@@ -65,7 +65,7 @@ public class SMRMultiLogunitTest extends AbstractViewTest {
     }
 
     /**
-     * Single Thread.
+     * Single ThreadParameter.
      * Verifies a read after 2 writes on the same key.
      * The writes are done across 2 different instantiations of the same SMRMap.
      */
@@ -90,7 +90,7 @@ public class SMRMultiLogunitTest extends AbstractViewTest {
     }
 
     /**
-     * Single Thread.
+     * Single ThreadParameter.
      * Verifies read after multiple writes (ONE_THOUSAND).
      */
     @Test

@@ -9,6 +9,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
@@ -485,7 +486,6 @@ public class NettyCommTest extends AbstractCorfuTest {
                         .build());
         clientRouter.getConnectionFuture().join();
         assertThat(clientRouter.getClient(BaseClient.class).pingSync()).isTrue();
-        clientRouter.stop();
 
         serverData.shutdownServer();
     }
@@ -538,26 +538,25 @@ public class NettyCommTest extends AbstractCorfuTest {
         volatile ChannelFuture f;
 
         final ServerContext serverContext;
+        CorfuServer server;
 
         public NettyServerData(@Nonnull ServerContext context) {
-            this.serverContext = context;
+            serverContext = context;
+            server = new CorfuServer(serverContext);
+            f = server.start();
         }
 
         void bootstrapServer() throws Exception {
-            NettyServerRouter nsr =
-                new NettyServerRouter(Collections.singletonList(new BaseServer(serverContext)));
-            f = CorfuServer.startAndListen(serverContext.getBossGroup(),
-                                            serverContext.getWorkerGroup(),
-                                            b -> CorfuServer.configureBootstrapOptions(
-                                                serverContext, b),
-                                            serverContext,
-                                            nsr,
-                                            serverContext.getServerConfig(Integer.class,
-                                                "<port>"));
+
         }
 
         public void shutdownServer() {
-            f.channel().close().awaitUninterruptibly();
+            if (!f.channel().closeFuture().isDone()) {
+                f.channel().close().awaitUninterruptibly();
+                if (server != null) {
+                    server.close();
+                }
+            }
         }
 
     }

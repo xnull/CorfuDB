@@ -8,7 +8,9 @@ import static org.fusesource.jansi.Ansi.ansi;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
-import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.Channel;
@@ -22,6 +24,9 @@ import io.netty.handler.codec.LengthFieldPrepender;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import java.io.File;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -32,6 +37,8 @@ import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
+
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.corfudb.protocols.wireprotocol.NettyCorfuMessageDecoder;
 import org.corfudb.protocols.wireprotocol.NettyCorfuMessageEncoder;
@@ -40,6 +47,7 @@ import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuInterrupte
 import org.corfudb.security.sasl.plaintext.PlainTextSaslNettyServer;
 import org.corfudb.security.tls.SslContextConstructor;
 import org.corfudb.util.GitRepositoryState;
+import org.corfudb.util.NodeLocator.Protocol;
 import org.corfudb.util.Version;
 import org.docopt.Docopt;
 import org.fusesource.jansi.AnsiConsole;
@@ -55,7 +63,7 @@ import org.slf4j.LoggerFactory;
  */
 
 @Slf4j
-public class CorfuServer {
+public class CorfuServer implements AutoCloseable {
     /**
      * This string defines the command line arguments,
      * in the docopt DSL (see http://docopt.org) for the executable.
@@ -182,6 +190,12 @@ public class CorfuServer {
                 new Docopt(USAGE).withVersion(GitRepositoryState.getRepositoryState().describe)
                         .parse(args);
 
+        // Set the name of this thread, if requested.
+        final String threadPrefix = (String) opts.get("--Prefix");
+        if (!threadPrefix.equals("")) {
+            Thread.currentThread().setName(threadPrefix);
+        }
+
         // Print a nice welcome message.
         AnsiConsole.systemInstall();
         printLogo();
@@ -203,51 +217,70 @@ public class CorfuServer {
 
         log.debug("Started with arguments: " + opts);
 
-        // Create the service directory if it does not exist.
-        if (!(Boolean) opts.get("--memory")) {
-            File serviceDir = new File((String) opts.get("--log-path"));
-
-            if (!serviceDir.isDirectory()) {
-                log.error("Service directory {} does not point to a directory. Aborting.",
-                        serviceDir);
-                throw new RuntimeException("Service directory must be a directory!");
-            } else {
-                String corfuServiceDirPath = serviceDir.getAbsolutePath()
-                        + File.separator
-                        + "corfu";
-                File corfuServiceDir = new File(corfuServiceDirPath);
-                // Update the new path with the dedicated child service directory.
-                opts.put("--log-path", corfuServiceDirPath);
-                if (!corfuServiceDir.exists() && corfuServiceDir.mkdirs()) {
-                    log.info("Created new service directory at {}.", corfuServiceDir);
-                }
-            }
+        try (CorfuServer server = new CorfuServer(new ServerContext(opts))) {
+            server.start().channel().closeFuture().syncUninterruptibly();
         }
+    }
 
-        // Create a common Server Context for all servers to access.
-        try (ServerContext serverContext = new ServerContext(opts)) {
-            List<AbstractServer> servers = ImmutableList.<AbstractServer>builder()
-                    .add(new BaseServer(serverContext))
-                    .add(new SequencerServer(serverContext))
-                    .add(new LayoutServer(serverContext))
-                    .add(new LogUnitServer(serverContext))
-                    .add(new ManagementServer(serverContext))
-                    .build();
+    @Getter
+    private final ServerContext serverContext;
 
-            NettyServerRouter router = new NettyServerRouter(servers);
+    private final Map<Class<? extends AbstractServer>, AbstractServer> serverMap;
 
-            // Register shutdown handler
-            Thread shutdownThread = new Thread(() -> cleanShutdown(router));
-            shutdownThread.setName("ShutdownThread");
-            Runtime.getRuntime().addShutdownHook(shutdownThread);
+    private final NettyServerRouter router;
 
-            startAndListen(serverContext.getBossGroup(),
-                serverContext.getWorkerGroup(),
-                b -> configureBootstrapOptions(serverContext, b),
-                serverContext,
-                router,
-                port).channel().closeFuture().syncUninterruptibly();
+    private ChannelFuture bindFuture;
+
+    /** Get the requested Corfu server.
+     *
+     * @param serverClass
+     * @param <T>
+     * @return
+     */
+    @SuppressWarnings("unchecked")
+    public @Nonnull <T extends AbstractServer> T getServer(@Nonnull Class<T> serverClass) {
+        T server = (T) serverMap.get(serverClass);
+        if (server == null) {
+            throw new UnrecoverableCorfuError("Server does not exist");
         }
+        return server;
+    }
+
+    public CorfuServer(@Nonnull ServerContext serverContext) {
+        this.serverContext = serverContext;
+        serverMap = ImmutableMap.<Class<? extends AbstractServer>, AbstractServer>builder()
+                        .put(BaseServer.class, new BaseServer(serverContext))
+                        .put(SequencerServer.class, new SequencerServer(serverContext))
+                        .put(LayoutServer.class, new LayoutServer(serverContext))
+                        .put(LogUnitServer.class, new LogUnitServer(serverContext))
+                        .put(ManagementServer.class, new ManagementServer(serverContext))
+                        .build();
+        router = new NettyServerRouter(serverMap.values(), serverContext);
+    }
+
+    public ChannelFuture start() {
+        // Register shutdown handler
+        Thread shutdownThread = new Thread(() -> cleanShutdown(serverContext, router));
+        shutdownThread.setName(serverContext.getThreadPrefix() + "ShutdownThread");
+        Runtime.getRuntime().addShutdownHook(shutdownThread);
+
+        bindFuture = startAndListen(serverContext.getBossGroup(),
+            serverContext.getWorkerGroup(),
+            b -> configureBootstrapOptions(serverContext, b),
+            serverContext,
+            router,
+            serverContext.getNodeLocator().getBindingSocketAddress());
+
+        return bindFuture.syncUninterruptibly();
+    }
+
+    @Override
+    public void close() {
+        serverContext.close();
+        bindFuture.channel().close().syncUninterruptibly();
+        serverMap.values().parallelStream()
+            .forEach(AbstractServer::shutdown);
+        router.shutdown();
     }
 
     /** A functional interface for receiving and configuring a {@link ServerBootstrap}.
@@ -277,28 +310,24 @@ public class CorfuServer {
      *                              server.
      * @param router                A {@link NettyServerRouter} which will process incoming
      *                              messages.
-     * @param port                  The port the {@link ServerChannel} will be created on.
+     * @param address               The {@link SocketAddress} the {@link ServerChannel}
+     *                              will be created on.
      * @return                      A {@link ChannelFuture} which can be used to wait for the server
      *                              to be shutdown.
      */
-    public static
-            ChannelFuture startAndListen(@Nonnull EventLoopGroup bossGroup,
+    public ChannelFuture startAndListen(@Nonnull EventLoopGroup bossGroup,
                           @Nonnull EventLoopGroup workerGroup,
                           @Nonnull BootstrapConfigurer bootstrapConfigurer,
                           @Nonnull ServerContext context,
                           @Nonnull NettyServerRouter router,
-                          int port) {
-        try {
-            ServerBootstrap bootstrap = new ServerBootstrap();
-            bootstrap.group(bossGroup, workerGroup)
-                .channel(context.getChannelImplementation().getServerChannelClass());
-            bootstrapConfigurer.configure(bootstrap);
+                          @Nonnull SocketAddress address) {
+        ServerBootstrap bootstrap = new ServerBootstrap();
+        bootstrap.group(bossGroup, workerGroup)
+            .channel(context.getChannelImplementation().getServerChannelClass());
+        bootstrapConfigurer.configure(bootstrap);
 
-            bootstrap.childHandler(getServerChannelInitializer(context, router));
-            return bootstrap.bind(port).sync();
-        } catch (InterruptedException ie) {
-            throw new UnrecoverableCorfuInterruptedError(ie);
-        }
+        bootstrap.childHandler(getServerChannelInitializer(context, router));
+        return bootstrap.bind(address);
     }
 
     /** Configure server bootstrap per-channel options, such as TCP options, etc.
@@ -306,13 +335,15 @@ public class CorfuServer {
      * @param context       The {@link ServerContext} to use.
      * @param bootstrap     The {@link ServerBootstrap} to be configured.
      */
-    public static void configureBootstrapOptions(@Nonnull ServerContext context,
+    public void configureBootstrapOptions(@Nonnull ServerContext context,
             @Nonnull ServerBootstrap bootstrap) {
-        bootstrap.option(ChannelOption.SO_BACKLOG, 100)
-            .childOption(ChannelOption.SO_KEEPALIVE, true)
-            .childOption(ChannelOption.SO_REUSEADDR, true)
-            .childOption(ChannelOption.TCP_NODELAY, true)
-            .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+        if (!serverContext.getNodeLocator().getProtocol().equals(Protocol.LOCAL)) {
+            bootstrap.option(ChannelOption.SO_BACKLOG, 100)
+                .childOption(ChannelOption.SO_KEEPALIVE, true)
+                .childOption(ChannelOption.SO_REUSEADDR, true)
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+        }
     }
 
 
@@ -384,7 +415,17 @@ public class CorfuServer {
         return new ChannelInitializer() {
             @Override
             protected void initChannel(@Nonnull Channel ch) throws Exception {
-                // If TLS is enabled, setup the encryption pipeline.
+                if (context.getPreinitializer() != null) {
+                    if (!context.getPreinitializer().preInitialize(ch)) {
+                        return;
+                    }
+                }
+                context.getClientChannels().put(ch.remoteAddress(), ch);
+                ch.closeFuture().addListener(f -> {
+                   context.getClientChannels().remove(ch.remoteAddress());
+                });
+
+               // If TLS is enabled, setup the encryption pipeline.
                 if (tlsEnabled) {
                     SSLEngine engine = sslContext.newEngine(ch.alloc());
                     engine.setEnabledCipherSuites(enabledTlsCipherSuites);
@@ -410,7 +451,7 @@ public class CorfuServer {
                 ch.pipeline().addLast(new ServerHandshakeHandler(context.getNodeId(),
                         Version.getVersionString() + "("
                                 + GitRepositoryState.getRepositoryState().commitIdAbbrev + ")",
-                        context.getServerConfig(String.class, "--HandshakeTimeout")));
+                                context));
                 // Route the message to the server class.
                 ch.pipeline().addLast(router);
             }
@@ -420,10 +461,11 @@ public class CorfuServer {
     /**
      * Attempt to cleanly shutdown all the servers.
      */
-    public static void cleanShutdown(@Nonnull NettyServerRouter router) {
-        log.info("CleanShutdown: Starting Cleanup.");
+    public static void cleanShutdown(@Nonnull ServerContext context,
+                                    @Nonnull NettyServerRouter router) {
+        log.info("cleanShutdown: Starting Cleanup.");
         // Create a list of servers
-        final List<AbstractServer> servers = router.getServers();
+        final Collection<AbstractServer> servers = router.getServers();
 
         // A executor service to create the shutdown threads
         // plus name the threads correctly.
@@ -435,22 +477,25 @@ public class CorfuServer {
         CompletableFuture[] shutdownFutures = servers.stream()
                 .map(s -> CompletableFuture.runAsync(() -> {
                     try {
-                        Thread.currentThread().setName(s.getClass().getSimpleName()
+                        Thread.currentThread().setName(
+                                context.getThreadPrefix()
+                                + s.getClass().getSimpleName()
                                 + "-shutdown");
-                        log.info("CleanShutdown: Shutting down {}",
+                        log.info("cleanShutdown: Shutting down {}",
                                 s.getClass().getSimpleName());
                         s.shutdown();
-                        log.info("CleanShutdown: Cleanly shutdown {}",
+                        log.info("cleanShutdown: Cleanly shutdown {}",
                                 s.getClass().getSimpleName());
                     } catch (Exception e) {
-                        log.error("CleanShutdown: Failed to cleanly shutdown {}",
+                        log.error("cleanShutdown: Failed to cleanly shutdown {}",
                                 s.getClass().getSimpleName(), e);
                     }
                 }, shutdownService))
                 .toArray(CompletableFuture[]::new);
 
         CompletableFuture.allOf(shutdownFutures).join();
-        log.info("CleanShutdown: Shutdown Complete.");
+        router.shutdown();
+        log.info("cleanShutdown: Shutdown Complete.");
     }
 
     /**

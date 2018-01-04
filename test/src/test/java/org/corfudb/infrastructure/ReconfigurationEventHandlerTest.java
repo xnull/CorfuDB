@@ -49,13 +49,13 @@ public class ReconfigurationEventHandlerTest extends AbstractViewTest {
         bootstrapAllServers(originalLayout);
 
         CorfuRuntime corfuRuntime = new CorfuRuntime();
-        corfuRuntime.addLayoutServer(getEndpoint(SERVERS.PORT_0));
-        corfuRuntime.addLayoutServer(getEndpoint(SERVERS.PORT_1));
-        corfuRuntime.addLayoutServer(getEndpoint(SERVERS.PORT_2));
+        corfuRuntime.addLayoutServer(SERVERS.ENDPOINT_0);
+        corfuRuntime.addLayoutServer(SERVERS.ENDPOINT_1);
+        corfuRuntime.addLayoutServer(SERVERS.ENDPOINT_2);
         corfuRuntime.connect();
 
         Set<String> failedServers = new HashSet<>();
-        failedServers.add(getEndpoint(SERVERS.PORT_2));
+        failedServers.add(SERVERS.ENDPOINT_2);
 
         ReconfigurationEventHandler reconfigurationEventHandler = new ReconfigurationEventHandler();
         IReconfigurationHandlerPolicy failureHandlerPolicy = new PurgeFailurePolicy();

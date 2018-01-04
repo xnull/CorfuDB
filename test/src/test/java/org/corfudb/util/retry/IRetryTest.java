@@ -5,6 +5,9 @@
 package org.corfudb.util.retry;
 
 import org.corfudb.AbstractCorfuTest;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.parameters.Param;
+import org.corfudb.test.parameters.Parameter;
 import org.junit.Test;
 
 import java.sql.SQLException;
@@ -16,23 +19,26 @@ import static org.assertj.core.api.Assertions.fail;
 /**
  * Created by Konstantin Spirov on 4/6/2017.
  */
-public class IRetryTest extends AbstractCorfuTest {
+@CorfuTest
+public class IRetryTest {
 
-    @Test
-    public void testIRetryReturnsValueAfterLotsOfRetries() throws SQLException, InterruptedException {
+    @CorfuTest
+    public void testIRetryReturnsValueAfterLotsOfRetries(
+        @Parameter(Param.NUM_ITERATIONS_MODERATE) int iterations
+        ) throws SQLException, InterruptedException {
         AtomicInteger retries = new AtomicInteger(0);
         String e = IRetry.build(ExponentialBackoffRetry.class, SQLException.class, () -> {
-            if (retries.getAndIncrement()< PARAMETERS.NUM_ITERATIONS_MODERATE) {
+            if (retries.getAndIncrement() < iterations) {
                 throw new RetryNeededException();
             }
             return "ok";
         }).setOptions(x -> x.setBase(1))
         .run();
         assertThat(e).isEqualTo("ok");
-        assertThat(retries.get()).isEqualTo(PARAMETERS.NUM_ITERATIONS_MODERATE+1);
+        assertThat(retries.get()).isEqualTo(iterations + 1);
     }
 
-    @Test
+    @CorfuTest
     public void testIRetryIsAbleToThrowCatchedExceptions() throws InterruptedException {
         AtomicInteger retries = new AtomicInteger(0);
         try {

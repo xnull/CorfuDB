@@ -1,33 +1,41 @@
 package org.corfudb.runtime.collections;
 
+import com.google.common.reflect.TypeToken;
+import java.time.Duration;
 import lombok.Getter;
 import org.corfudb.annotations.Accessor;
 import org.corfudb.annotations.CorfuObject;
 import org.corfudb.annotations.MutatorAccessor;
+import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.view.AbstractViewTest;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.concurrent.ConcurrentScheduler;
+import org.corfudb.test.parameters.Param;
+import org.corfudb.test.parameters.Parameter;
 import org.junit.Test;
 
 import java.util.HashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.corfudb.test.parameters.Param.CONCURRENCY_SOME;
+import static org.corfudb.test.parameters.Param.NUM_ITERATIONS_LOW;
+import static org.corfudb.test.parameters.Param.TIMEOUT_LONG;
 
 
 /**
  * Created by mwei on 4/7/16.
  */
-public class PutIfAbsentMapTest extends AbstractViewTest {
+@CorfuTest
+public class PutIfAbsentMapTest {
 
-    @Getter
-    final String defaultConfigurationString = getDefaultEndpoint();
 
-    @Test
-    public void putIfAbsentTest() {
-        getDefaultRuntime();
-
-        PutIfAbsentMap<String, String> stringMap = getRuntime().getObjectsView().build()
+    @CorfuTest
+    void putIfAbsentTest(CorfuRuntime runtime) {
+        PutIfAbsentMap<String, String> stringMap =
+            runtime.getObjectsView().build()
                 .setStreamName("stringMap")
-                .setType(PutIfAbsentMap.class)
+                .setTypeToken(new TypeToken<PutIfAbsentMap<String, String>>() {})
                 .open();
 
         stringMap.put("a", "b");
@@ -42,21 +50,22 @@ public class PutIfAbsentMapTest extends AbstractViewTest {
                 .isEqualTo("b");
     }
 
-    @Test
-    public void putIfAbsentTestConcurrent()
+    @CorfuTest
+    void putIfAbsentTestConcurrent(CorfuRuntime runtime,
+                                   ConcurrentScheduler scheduler,
+                                   @Parameter(NUM_ITERATIONS_LOW) int iterations,
+                                   @Parameter(CONCURRENCY_SOME) int concurrency,
+                                   @Parameter(TIMEOUT_LONG) Duration timeout)
             throws Exception {
-        getDefaultRuntime();
-
-        PutIfAbsentMap<String, String> stringMap = getRuntime().getObjectsView().build()
+        PutIfAbsentMap<String, Integer> stringMap =
+            runtime.getObjectsView().build()
                 .setStreamName("stringMap")
-                .setType(PutIfAbsentMap.class)
+                .setTypeToken(new TypeToken<PutIfAbsentMap<String, Integer>>() {})
                 .open();
 
         ConcurrentLinkedQueue<Boolean> resultList = new ConcurrentLinkedQueue<>();
-        scheduleConcurrently(PARAMETERS.NUM_ITERATIONS_LOW, x -> {
-            resultList.add(stringMap.putIfAbsent("a", Integer.toString(x)));
-        });
-        executeScheduled(PARAMETERS.CONCURRENCY_SOME, PARAMETERS.TIMEOUT_LONG);
+        scheduler.schedule(iterations, x -> resultList.add(stringMap.putIfAbsent("a", x)));
+        scheduler.execute(concurrency, timeout);
 
         long trueCount = resultList.stream()
                 .filter(x -> x)

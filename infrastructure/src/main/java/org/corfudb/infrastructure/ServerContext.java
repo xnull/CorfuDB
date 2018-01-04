@@ -3,10 +3,16 @@ package org.corfudb.infrastructure;
 import com.codahale.metrics.MetricRegistry;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
+import java.io.File;
+import java.net.SocketAddress;
 import java.time.Duration;
 import java.util.*;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadFactory;
 import javax.annotation.Nonnull;
 import lombok.Getter;
@@ -14,6 +20,7 @@ import lombok.Setter;
 
 import lombok.extern.slf4j.Slf4j;
 import org.corfudb.comm.ChannelImplementation;
+
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.CorfuRuntime.CorfuRuntimeParameters;
 import org.corfudb.runtime.exceptions.WrongEpochException;
@@ -26,6 +33,7 @@ import org.corfudb.infrastructure.management.HealingDetector;
 import org.corfudb.infrastructure.management.IDetector;
 import org.corfudb.runtime.view.SequencerHealingPolicy;
 import org.corfudb.util.MetricsUtils;
+import org.corfudb.util.NodeLocator;
 import org.corfudb.util.UuidUtils;
 
 import static org.corfudb.util.MetricsUtils.isMetricsReportingSetUp;
@@ -113,6 +121,28 @@ public class ServerContext implements AutoCloseable {
     private final EventLoopGroup workerGroup;
 
     @Getter
+    private final Map<SocketAddress, Channel> clientChannels;
+
+    @FunctionalInterface
+    public interface ChannelPreinitializer {
+        boolean preInitialize(Channel channel);
+    }
+
+    @Getter
+    private final ChannelPreinitializer preinitializer;
+
+    @Getter
+    private final List<UUID> blacklistedClients;
+
+    @Getter(lazy = true)
+    private final NodeLocator nodeLocator = NodeLocator.builder()
+                    .protocol(getChannelImplementation().getProtocol())
+                    .host(getServerConfig(String.class, "--address"))
+                    .port(Integer.parseInt(getServerConfig(String.class, "<port>")))
+                    .nodeId(getNodeId())
+                    .build();
+
+    @Getter
     public static final MetricRegistry metrics = new MetricRegistry();
 
     /**
@@ -122,6 +152,8 @@ public class ServerContext implements AutoCloseable {
      */
     public ServerContext(Map<String, Object> serverConfig) {
         this.serverConfig = serverConfig;
+        generateServiceDirectory(serverConfig);
+
         this.dataStore = new DataStore(serverConfig);
         generateNodeId();
         this.serverRouter = serverRouter;
@@ -145,6 +177,12 @@ public class ServerContext implements AutoCloseable {
             ? getServerConfig(EventLoopGroup.class, "boss") :
             getNewBossGroup();
 
+        preinitializer =
+            getServerConfig(ChannelPreinitializer.class, "preinitializer");
+
+        clientChannels = new ConcurrentHashMap<>();
+        blacklistedClients = new CopyOnWriteArrayList<>();
+
         // Metrics setup & reporting configuration
         String mp = "corfu.server.";
         synchronized (metrics) {
@@ -154,6 +192,24 @@ public class ServerContext implements AutoCloseable {
                 MetricsUtils.metricsReportingSetup(metrics);
             }
         }
+    }
+
+    private void generateServiceDirectory(@Nonnull Map<String, Object> serverConfig) {
+        // Create the service directory if it does not exist.
+        if (!(Boolean) serverConfig.get("--memory")) {
+            File serviceDir = new File((String) serverConfig.get("--log-path"));
+
+            if (!serviceDir.exists()) {
+                if (serviceDir.mkdirs()) {
+                    log.info("Created new service directory at {}.", serviceDir);
+                }
+            } else if (!serviceDir.isDirectory()) {
+                log.error("Service directory {} does not point to a directory. Aborting.",
+                    serviceDir);
+                throw new RuntimeException("Service directory must be a directory!");
+            }
+        }
+
     }
 
     /** Get the {@link ChannelImplementation}to use.
@@ -170,6 +226,8 @@ public class ServerContext implements AutoCloseable {
         return CorfuRuntime.CorfuRuntimeParameters.builder()
                 .nettyEventLoop(clientGroup)
                 .shutdownNettyEventLoop(false)
+                .socketType(getChannelImplementation())
+                .threadPrefix((String) serverConfig.get("--Prefix"))
                 .tlsEnabled((Boolean) serverConfig.get("--enable-tls"))
                 .keyStore((String) serverConfig.get("--keystore"))
                 .ksPasswordFile((String) serverConfig.get("--keystore-password-file"))
@@ -259,18 +317,17 @@ public class ServerContext implements AutoCloseable {
         }
         log.info("getNewSingleNodeLayout: Bootstrapping with cluster Id {} [{}]",
             clusterId, UuidUtils.asBase64(clusterId));
-        String localAddress = getServerConfig().get("--address") + ":"
-            + getServerConfig().get("<port>");
+
         return new Layout(
-            Collections.singletonList(localAddress),
-            Collections.singletonList(localAddress),
+            Collections.singletonList(getNodeLocator().toString()),
+            Collections.singletonList(getNodeLocator().toString()),
             Collections.singletonList(new LayoutSegment(
                 Layout.ReplicationMode.CHAIN_REPLICATION,
                 0L,
                 -1L,
                 Collections.singletonList(
                     new Layout.LayoutStripe(
-                        Collections.singletonList(localAddress)
+                        Collections.singletonList(getNodeLocator().toString())
                     )
                 )
             )),

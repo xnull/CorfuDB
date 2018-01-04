@@ -4,6 +4,8 @@ import com.google.common.reflect.TypeToken;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.collections.SMRMap;
 import org.corfudb.runtime.view.ObjectsView;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.parameters.CorfuObjectParameter;
 import org.corfudb.util.serializer.ISerializer;
 import org.corfudb.util.serializer.Serializers;
 import org.junit.Test;
@@ -17,15 +19,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Created by mwei on 1/21/16.
  */
-public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
-    @Test
-    @SuppressWarnings("unchecked")
-    public void canReadWriteToSingle()
-            throws Exception {
-        getDefaultRuntime();
+@CorfuTest
+public class CorfuSMRObjectProxyTest {
 
-        Map<String, String> testMap = (Map<String, String>)
-                instantiateCorfuObject(new TypeToken<SMRMap<String,String>>() {}, "test");
+    @CorfuTest
+    @SuppressWarnings("unchecked")
+    public void canReadWriteToSingle(CorfuRuntime runtime,
+        @CorfuObjectParameter(stream = "test")
+        SMRMap<String,String> testMap,
+        @CorfuObjectParameter(stream = "test")
+        SMRMap<String,String> testMap2)
+            throws Exception {
 
         testMap.clear();
         assertThat(testMap.put("a", "a"))
@@ -35,32 +39,23 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
         assertThat(testMap.get("a"))
                 .isEqualTo("b");
 
-        Map<String, String> testMap2 = (Map<String, String>)
-                instantiateCorfuObject(new TypeToken<SMRMap<String,String>>() {}, "test");
-
         assertThat(testMap2.get("a"))
                 .isEqualTo("b");
     }
 
-    @Test
-    public void canOpenObjectWithTwoRuntimes()
+    @CorfuTest
+    public void canOpenObjectWithTwoRuntimes(
+        CorfuRuntime runtime,
+        @CorfuObjectParameter(stream = "test") TestClass testClass,
+        CorfuRuntime runtime2,
+        @CorfuObjectParameter(stream = "test") TestClass testClass2)
             throws Exception {
-        getDefaultRuntime();
 
         final int TEST_VALUE = 42;
-        TestClass testClass = (TestClass)
-                instantiateCorfuObject(new TypeToken<TestClass>() {}, "test");
 
         testClass.set(TEST_VALUE);
         assertThat(testClass.get())
                 .isEqualTo(TEST_VALUE);
-
-        CorfuRuntime runtime2 = getNewRuntime(getDefaultNode());
-        runtime2.connect();
-
-        TestClass testClass2 = (TestClass)
-                instantiateCorfuObject(runtime2,
-                        new TypeToken<TestClass>() {}, "test");
 
         assertThat(testClass2.get())
                 .isEqualTo(TEST_VALUE);
@@ -156,15 +151,11 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
     }
     */
 
-    @Test
+    @CorfuTest
     @SuppressWarnings("unchecked")
-    public void canUseAnnotations()
+    public void canUseAnnotations(CorfuRuntime runtime,
+        @CorfuObjectParameter(stream = "test") TestClassUsingAnnotation test)
             throws Exception {
-        getDefaultRuntime();
-
-        TestClassUsingAnnotation test = (TestClassUsingAnnotation)
-                instantiateCorfuObject(new TypeToken<TestClassUsingAnnotation>() {}, "test");
-
         assertThat(test.testFn1())
                 .isTrue();
 
@@ -175,10 +166,13 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
                 .isNotZero();
 
         // clear the cache, forcing a new object to be built.
-        getRuntime().getObjectsView().getObjectCache().clear();
+        runtime.getObjectsView().getObjectCache().clear();
 
-        TestClassUsingAnnotation test2 = (TestClassUsingAnnotation)
-                instantiateCorfuObject(TestClassUsingAnnotation.class, "test");
+        TestClassUsingAnnotation test2 =
+                runtime.getObjectsView().build()
+                    .setStreamName("test")
+                    .setType(TestClassUsingAnnotation.class)
+                    .open();
 
         assertThat(test)
                 .isNotSameAs(test2);
@@ -200,7 +194,7 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
 
         for(int x = 0; x < PARAMETERS.NUM_ITERATIONS_LOW; x++) {
             // thread 1: update "a" and "b" atomically
-            Thread t1 = new Thread(() -> {
+            ThreadParameter t1 = new ThreadParameter(() -> {
                 runtime.getObjectsView().TXBegin();
                 map.put("a", 1);
                 map.put("b", 1);
@@ -210,7 +204,7 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
             t1.start();
 
             // thread 2: read "a", then "b"
-            Thread t2 = new Thread(() -> {
+            ThreadParameter t2 = new ThreadParameter(() -> {
                 map.get("a");
                 map.get("b");
             });
@@ -242,13 +236,12 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
     }
      **/
 
-    @Test
+    @CorfuTest
     @SuppressWarnings("unchecked")
-    public void canUseCustomSerializer() throws Exception {
+    public void canUseCustomSerializer(CorfuRuntime r) throws Exception {
         //Register a custom serializer and use it with an SMR object
         ISerializer customSerializer = new CustomSerializer((byte) (Serializers.SYSTEM_SERIALIZERS_COUNT + 1));
         Serializers.registerSerializer(customSerializer);
-        CorfuRuntime r = getDefaultRuntime();
 
         Map<String, String> test = r.getObjectsView().build()
                 .setType(SMRMap.class)
@@ -268,11 +261,10 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
      *
      * @throws Exception
      */
-    @Test
-    public void doesNotResetSerializerIfMapAlreadyExists() throws Exception {
+    @CorfuTest
+    public void doesNotResetSerializerIfMapAlreadyExists(CorfuRuntime r) throws Exception {
         ISerializer customSerializer = new CustomSerializer((byte) (Serializers.SYSTEM_SERIALIZERS_COUNT + 1));
         Serializers.registerSerializer(customSerializer);
-        CorfuRuntime r = getDefaultRuntime();
 
         Map<String, String> test = r.getObjectsView().build()
                 .setType(SMRMap.class)

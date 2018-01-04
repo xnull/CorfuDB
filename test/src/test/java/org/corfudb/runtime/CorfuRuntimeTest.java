@@ -1,7 +1,12 @@
 package org.corfudb.runtime;
 
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.Temporal;
+import java.time.temporal.TemporalUnit;
+import java.util.concurrent.TimeUnit;
 import org.corfudb.infrastructure.TestLayoutBuilder;
 
+import org.corfudb.runtime.CorfuRuntime.CorfuRuntimeParameters;
 import org.corfudb.runtime.clients.BaseClient;
 import org.corfudb.runtime.clients.LayoutClient;
 import org.corfudb.runtime.clients.LogUnitClient;
@@ -9,6 +14,7 @@ import org.corfudb.runtime.clients.ManagementClient;
 import org.corfudb.runtime.clients.SequencerClient;
 import org.corfudb.runtime.clients.TestClientRouter;
 import org.corfudb.runtime.clients.TestRule;
+import org.corfudb.runtime.exceptions.unrecoverable.RuntimeShutdownError;
 import org.corfudb.runtime.exceptions.unrecoverable.SystemUnavailableError;
 
 import org.corfudb.infrastructure.TestServerRouter;
@@ -17,6 +23,12 @@ import org.corfudb.runtime.exceptions.WrongEpochException;
 import org.corfudb.runtime.view.AbstractViewTest;
 import org.corfudb.runtime.view.Layout;
 import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.concurrent.ConcurrentScheduler;
+import org.corfudb.test.parameters.Param;
+import org.corfudb.test.parameters.Parameter;
+import org.corfudb.test.parameters.Server;
+import org.corfudb.test.parameters.Servers;
 import org.corfudb.util.CFUtils;
 import org.corfudb.util.NodeLocator;
 import org.junit.Before;
@@ -32,55 +44,80 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.corfudb.test.parameters.Param.CONCURRENCY_TWO;
+import static org.corfudb.test.parameters.Param.NUM_ITERATIONS_LARGE;
+import static org.corfudb.test.parameters.Param.TIMEOUT_LONG;
+import static org.corfudb.test.parameters.Param.TIMEOUT_SHORT;
 
 
 /**
  * Created by maithem on 6/21/16.
  */
-public class CorfuRuntimeTest extends AbstractViewTest {
+@CorfuTest
+public class CorfuRuntimeTest {
     static final int TIME_TO_WAIT_FOR_LAYOUT_IN_SEC = 5;
-    static final long TIMEOUT_CORFU_RUNTIME_IN_MS = 500;
+    static final long TIMEOUT_CORFU_RUNTIME_IN_MS = 100;
 
 
 
-    /**
-     * Resets the router function to the default function for AbstractViewTest.
-     */
-    @Before
-    public void setDefaultRuntimeGetRouterFunction() {
-        CorfuRuntime.overrideGetRouterFunction =
-                (runtime, endpoint) -> super.getRouterFunction(runtime, endpoint);
-    }
-
-    @Test
-    public void checkValidLayout() throws Exception {
-
-        CorfuRuntime rt = getDefaultRuntime().connect();
-
+    @CorfuTest
+    public void checkValidLayout(CorfuRuntime rt,
+                                 ConcurrentScheduler scheduler,
+                                 @Parameter(NUM_ITERATIONS_LARGE) int iterations,
+                                 @Parameter(CONCURRENCY_TWO) int concurrency,
+                                 @Parameter(TIMEOUT_LONG) Duration timeout)
+        throws Exception {
         // Check that access to the CorfuRuntime layout is always valid. Specifically, access to the layout
         // while a new layout is being fetched/set concurrently.
 
-        scheduleConcurrently(PARAMETERS.NUM_ITERATIONS_LARGE, (v) -> {
+        scheduler.schedule(iterations, (v) -> {
             rt.invalidateLayout();
 
         });
 
-        scheduleConcurrently(PARAMETERS.NUM_ITERATIONS_LARGE, (v) -> {
-            assertThat(rt.layout.get().getRuntime()).isEqualTo(rt);
+        scheduler.schedule(iterations, (v) -> {
+            assertThat(CFUtils.getUninterruptibly(rt.layout).getRuntime()).isEqualTo(rt);
         });
 
-        executeScheduled(PARAMETERS.CONCURRENCY_TWO, PARAMETERS.TIMEOUT_LONG);
-
+        scheduler.execute(concurrency,timeout);
     }
 
-    @Test
-    public void canInstantiateRuntimeWithoutTestRef() throws Exception {
+    /**
+     * Tests if an asynchronous connection request properly times out.
+     */
+    @CorfuTest
+    public void asyncConnectTimeout(@Parameter(TIMEOUT_SHORT) Duration timeout) throws Exception {
+        // Create a runtime which does not automatically connect and
+        // is set to a non-existent layout server.
+        CorfuRuntime rt = CorfuRuntime.fromParameters(CorfuRuntimeParameters.builder()
+                                        .autoConnect(false)
+                                        .layoutServer(NodeLocator.builder()
+                                                        .host("localhost")
+                                                        .port(1)
+                                                        .build())
+                                        .build());
+        try {
+            // Wait TIMEOUT_SHORT for the connection to complete (it will never complete).
+            // It should timeout and throw a timeout exception.
+            assertThatThrownBy(() ->
+                rt.connectAsync().get(timeout.toMillis(), TimeUnit.MILLISECONDS))
+                .isInstanceOf(TimeoutException.class);
+        } finally {
+            rt.shutdown();
+        }
+    }
 
-        addSingleServer(SERVERS.PORT_0);
-
-        CorfuRuntime rt = getNewRuntime(getDefaultNode());
-        rt.connect();
-
+    /**
+     * Tests if an asynchronous connection request can succeeed.
+     */
+    @CorfuTest
+    public void asyncConnectSucceeds(CorfuRuntime rt,
+                                     @Parameter(TIMEOUT_LONG) Duration timeout) throws Exception {
+        // Wait TIMEOUT_LONG for the connection to complete
+        rt.connectAsync().get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        // Make sure that the instance is actually connected.
+        assertThat(rt.getLayoutView().getLayout())
+            .isNotNull();
     }
 
     /**
@@ -90,6 +127,7 @@ public class CorfuRuntimeTest extends AbstractViewTest {
      * @return The generated layout.
      * @throws Exception
      */
+    /*
     private Layout get3NodeLayout() throws Exception {
         addServer(SERVERS.PORT_0);
         addServer(SERVERS.PORT_1);
@@ -119,7 +157,7 @@ public class CorfuRuntimeTest extends AbstractViewTest {
         getManagementServer(SERVERS.PORT_2).shutdown();
 
         return l;
-    }
+    }*/
 
     /**
      * Ensures that we will not accept a Layout that is obsolete.
@@ -132,6 +170,7 @@ public class CorfuRuntimeTest extends AbstractViewTest {
      *
      * @throws Exception
      */
+    /*
     @Test
     public void doesNotUpdateToLayoutWithSmallerEpoch() throws Exception {
 
@@ -173,23 +212,24 @@ public class CorfuRuntimeTest extends AbstractViewTest {
         rt.getRouter(SERVERS.ENDPOINT_0).setTimeoutResponse(1);
         rt.getRouter(SERVERS.ENDPOINT_1).setTimeoutResponse(1);
 
-        // Client gets layout from the staling LayoutServer but doesn't update it's layout.
-        rt.invalidateLayout();
-
         // Ensure that we never (never is time_to_wait seconds here) get a new layout.
-        CompletableFuture cf = CFUtils.within(rt.layout, Duration.ofSeconds(TIME_TO_WAIT_FOR_LAYOUT_IN_SEC));
-        CompletableFuture.supplyAsync(() -> cf);
+        CompletableFuture cf =
+            CFUtils.within(CompletableFuture.supplyAsync(() -> {
+                rt.invalidateLayout();
+                return CFUtils.getUninterruptibly(rt.layout);
+            }), Duration.ofSeconds(TIME_TO_WAIT_FOR_LAYOUT_IN_SEC));
 
         assertThatThrownBy(() -> cf.get()).isInstanceOf(ExecutionException.class).hasRootCauseInstanceOf(TimeoutException.class);
     }
+    */
 
 
-    @Test
-    public void doesNotAllowReadsAfterSealAndBeforeNewLayout() throws Exception {
-        CorfuRuntime runtime = getDefaultRuntime().setCacheDisabled(true).connect();
+    @CorfuTest
+    public void doesNotAllowReadsAfterSealAndBeforeNewLayout(CorfuRuntime runtime)
+        throws Exception {
+        runtime.setCacheDisabled(true);
 
-        Layout l = TestLayoutBuilder.single(0);
-        bootstrapAllServers(l);
+        Layout l = runtime.getLayoutView().getLayout();
 
         IStreamView sv = runtime.getStreamsView().get(CorfuRuntime.getStreamID("test"));
         sv.append("testPayload".getBytes());
@@ -203,7 +243,8 @@ public class CorfuRuntimeTest extends AbstractViewTest {
         runtime.invalidateLayout();
         runtime.layout.get();
 
-        LogUnitClient luc = runtime.getRouter(SERVERS.ENDPOINT_0).getClient(LogUnitClient.class);
+        LogUnitClient luc = runtime.getRouter(Servers.SERVER_0.getLocator().toString())
+            .getClient(LogUnitClient.class);
 
         assertThatThrownBy(() -> luc.read(0).get())
                 .isInstanceOf(ExecutionException.class)
@@ -218,12 +259,13 @@ public class CorfuRuntimeTest extends AbstractViewTest {
      *
      * @throws Exception
      */
+    /*
     @Test
     public void customNetworkExceptionHandler() throws Exception {
         class TimeoutHandler {
             CorfuRuntime rt;
             long maxTimeout;
-            ThreadLocal<Long> localTimeStart = new ThreadLocal<>();
+            long localTimeStart;
 
             TimeoutHandler(CorfuRuntime rt, long maxTimeout) {
                 this.rt = rt;
@@ -231,22 +273,21 @@ public class CorfuRuntimeTest extends AbstractViewTest {
             }
 
             void startTimeout() {
-                localTimeStart.set(System.currentTimeMillis());
+                localTimeStart = System.currentTimeMillis();
             }
 
             void checkIfTimeout() {
-                if (System.currentTimeMillis() - localTimeStart.get() > maxTimeout) {
+                if (System.currentTimeMillis() - localTimeStart > maxTimeout) {
                     stopRuntimeAndThrowException();
                 }
             }
 
             void stopRuntimeAndThrowException() {
-                rt.stop();
+                rt.shutdown();
                 throw new SystemUnavailableError("Timeout " + maxTimeout + " elapsed");
             }
         }
 
-        addSingleServer(SERVERS.PORT_0);
 
         CorfuRuntime runtime = getDefaultRuntime();
         TimeoutHandler th = new TimeoutHandler(runtime, TIMEOUT_CORFU_RUNTIME_IN_MS);
@@ -262,78 +303,8 @@ public class CorfuRuntimeTest extends AbstractViewTest {
         simulateEndpointDisconnected(runtime);
 
         assertThatThrownBy(() -> sv.append("testPayload".getBytes())).
-                isInstanceOf(SystemUnavailableError.class);
+                isInstanceOf(RuntimeShutdownError.class);
 
     }
-
-
-     /**
-     * Creates and bootstraps 3 nodes N0, N1 and N2.
-     * The runtime connects to the 3 nodes and sets the clientRouter epochs to 1, 1 and 1.
-     * Now the epoch is updated to 2.
-     * We now simulate a NetworkException while fetching a router to the first node
-     * in the list. The runtime is now invalidated, which forces to update the client router
-     * epochs. This should now update the epochs to the following: 1, 2, 2.
-     *
-     * @throws Exception
-     */
-    @Test
-    public void testFailedRouterInFetchLayout() throws Exception {
-
-        final Map<String, TestClientRouter> routerMap = new ConcurrentHashMap<>();
-        final AtomicReference<String> failedNode = new AtomicReference<>();
-
-        // This getRouterFunction simulates the network exception thrown during the
-        // NettyClientRouter creation.
-        // Note: This does not simulate NetworkException while message transfer or connection.
-        CorfuRuntime.overrideGetRouterFunction = (corfuRuntime, endpoint) -> {
-            if (failedNode.get() != null && endpoint.equals(failedNode.get())) {
-                throw new NetworkException("Test server not responding : ",
-                    NodeLocator.builder()
-                        .host(endpoint.split(":")[0])
-                        .port(Integer.parseInt(endpoint.split(":")[1]))
-                        .build());
-            }
-            if (!endpoint.startsWith("test:")) {
-                throw new RuntimeException("Unsupported endpoint in test: " + endpoint);
-            }
-            return routerMap.computeIfAbsent(endpoint,
-                    x -> {
-                        TestClientRouter tcn =
-                                new TestClientRouter(
-                                        (TestServerRouter) getServerRouter(getPort(endpoint)));
-                        tcn.addClient(new BaseClient())
-                                .addClient(new SequencerClient())
-                                .addClient(new LayoutClient())
-                                .addClient(new LogUnitClient())
-                                .addClient(new ManagementClient());
-                        return tcn;
-                    }
-            );
-        };
-
-        Layout l = get3NodeLayout();
-        CorfuRuntime runtime = getRuntime(l).connect();
-        String[] serverArray = runtime.getLayoutView().getLayout().getAllActiveServers()
-                .toArray(new String[l.getAllActiveServers().size()]);
-
-        l.setRuntime(runtime);
-        l.setEpoch(l.getEpoch() + 1);
-        l.moveServersToEpoch();
-        runtime.getLayoutView().updateLayout(l, 1L);
-
-        assertThat(routerMap.get(serverArray[0]).getEpoch()).isEqualTo(1L);
-        assertThat(routerMap.get(serverArray[1]).getEpoch()).isEqualTo(1L);
-        assertThat(routerMap.get(serverArray[2]).getEpoch()).isEqualTo(1L);
-
-        // Simulate router creation failure for the first endpoint in the list.
-        failedNode.set((String) l.getAllActiveServers().toArray()[0]);
-
-        runtime.invalidateLayout();
-        runtime.getLayoutView().getLayout();
-        assertThat(routerMap.get(serverArray[0]).getEpoch()).isEqualTo(1L);
-        assertThat(routerMap.get(serverArray[1]).getEpoch()).isEqualTo(2L);
-        assertThat(routerMap.get(serverArray[2]).getEpoch()).isEqualTo(2L);
-
-    }
+    */
 }

@@ -6,6 +6,7 @@ import java.security.KeyStore;
 import java.security.cert.Certificate;
 import java.util.Enumeration;
 import javax.net.ssl.SSLException;
+import org.corfudb.test.CorfuTest;
 import org.junit.Test;
 import sun.misc.BASE64Encoder;
 import sun.security.provider.X509Factory;
@@ -13,23 +14,24 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+@CorfuTest
 public class TlsUtilsTest {
     private String PASSWORD_FILE = "src/test/resources/security/reload/password";
     private String KEY_STORE_FILE = "src/test/resources/security/reload/client_trust_with_server.jks";
 
-    @Test
+    @CorfuTest
     public void testGetPassword() throws Exception {
         String password = TlsUtils.getKeyStorePassword(PASSWORD_FILE);
         assertEquals("password", password);
     }
 
-    @Test
+    @CorfuTest
     public void testGetEmptyPassword() throws Exception {
         String password = TlsUtils.getKeyStorePassword(null);
         assertEquals("", password);
     }
 
-    @Test
+    @CorfuTest
     public void testBadPasswordFile() throws Exception {
         try {
             TlsUtils.getKeyStorePassword("definitely fake location");
@@ -39,14 +41,14 @@ public class TlsUtilsTest {
         }
     }
 
-    @Test
+    @CorfuTest
     public void testOpenKeyStore() throws Exception {
         String password = TlsUtils.getKeyStorePassword(PASSWORD_FILE);
         KeyStore keyStore = TlsUtils.openKeyStore(KEY_STORE_FILE, password);
         assertEquals(2, keyStore.size());
     }
 
-    @Test
+    @CorfuTest
     public void testOpenKeyStoreBadPassword() throws Exception {
         try {
             TlsUtils.openKeyStore(KEY_STORE_FILE, "fake password");
@@ -56,7 +58,7 @@ public class TlsUtilsTest {
         }
     }
 
-    @Test
+    @CorfuTest
     public void testOpenKeyStoreBadLocation() throws Exception {
         try {
             TlsUtils.openKeyStore("definitely fake location", "fake password");

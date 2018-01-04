@@ -6,21 +6,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.google.common.collect.ImmutableMap;
 import java.util.UUID;
 import org.corfudb.runtime.view.AbstractViewTest;
+import org.corfudb.test.CorfuTest;
 import org.corfudb.util.NodeLocator;
 import org.corfudb.util.NodeLocator.Protocol;
 import org.junit.Test;
 
-public class NodeLocatorTest extends AbstractViewTest {
+@CorfuTest
+public class NodeLocatorTest {
 
-    @Test
+    @CorfuTest
     public void invalidNodeThrowsException() {
         assertThatThrownBy(() -> NodeLocator.parseString("invalid{}"))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
     /** Tests that a legacy (without protocol) node parses correctly. **/
-    @Test
-    public void legacyNodeParses() {
+    @CorfuTest
+    void legacyNodeParses() {
         final int PORT_NUM = 3000;
         NodeLocator locator = NodeLocator.parseString("10.0.0.1:3000");
 
@@ -37,8 +39,8 @@ public class NodeLocatorTest extends AbstractViewTest {
             .isEqualTo(Protocol.TCP);
     }
 
-    @Test
-    public void nodeCanBeConvertedBackAndForth() {
+    @CorfuTest
+    void nodeCanBeConvertedBackAndForth() {
         NodeLocator locator = NodeLocator.builder()
                                         .host("localhost")
                                         .port(1)
@@ -56,8 +58,8 @@ public class NodeLocatorTest extends AbstractViewTest {
             .isEqualToComparingFieldByField(parsed);
     }
 
-    @Test
-    public void nodeCanBeConvertedBackAndForthWithNoNodeId() {
+    @CorfuTest
+    void nodeCanBeConvertedBackAndForthWithNoNodeId() {
         NodeLocator locator = NodeLocator.builder()
             .host("localhost")
             .port(1)

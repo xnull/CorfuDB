@@ -37,7 +37,7 @@ public class TestLayoutBuilder {
     }
 
     static String getEndpoint(int port) {
-        return "test:" + port;
+        return "local://test:" + port;
     }
 
     public static Layout single(int port) {

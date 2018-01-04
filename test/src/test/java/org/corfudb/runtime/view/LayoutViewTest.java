@@ -179,7 +179,7 @@ public class LayoutViewTest extends AbstractViewTest {
         getManagementServer(SERVERS.PORT_2).shutdown();
         setAggressiveTimeouts(l, corfuRuntime);
 
-        // Thread to reconfigure the layout
+        // ThreadParameter to reconfigure the layout
         CountDownLatch startReconfigurationLatch = new CountDownLatch(1);
         CountDownLatch layoutReconfiguredLatch = new CountDownLatch(1);
 

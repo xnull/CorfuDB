@@ -6,6 +6,7 @@ import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.clients.TestRule;
 import org.corfudb.runtime.view.AbstractViewTest;
 import org.corfudb.runtime.view.Layout;
+import org.corfudb.util.NodeLocator;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -33,7 +34,7 @@ public class FailureDetectorTest extends AbstractViewTest {
         addServer(SERVERS.PORT_2);
 
         layout = new TestLayoutBuilder()
-                .setEpoch(1L)
+                .setEpoch(0L)
                 .addLayoutServer(SERVERS.PORT_0)
                 .addLayoutServer(SERVERS.PORT_1)
                 .addLayoutServer(SERVERS.PORT_2)
@@ -94,9 +95,9 @@ public class FailureDetectorTest extends AbstractViewTest {
         addServerRule(SERVERS.PORT_2, new TestRule().always().drop());
 
         Set<String> expectedResult = new HashSet<>();
-        expectedResult.add(getEndpoint(SERVERS.PORT_0));
-        expectedResult.add(getEndpoint(SERVERS.PORT_1));
-        expectedResult.add(getEndpoint(SERVERS.PORT_2));
+        expectedResult.add(SERVERS.ENDPOINT_0);
+        expectedResult.add(SERVERS.ENDPOINT_1);
+        expectedResult.add(SERVERS.ENDPOINT_2);
 
         assertThat(failureDetector.poll(layout, corfuRuntime).getFailingNodes())
                 .isEqualTo(expectedResult);
@@ -109,7 +110,7 @@ public class FailureDetectorTest extends AbstractViewTest {
 
         clearServerRules(SERVERS.PORT_0);
         // Has only SERVERS.PORT_1 & SERVERS.PORT_2
-        expectedResult.remove(getEndpoint(SERVERS.PORT_0));
+        expectedResult.remove(SERVERS.ENDPOINT_0);
 
         assertThat(failureDetector.poll(layout, corfuRuntime).getFailingNodes())
                 .isEqualTo(expectedResult);

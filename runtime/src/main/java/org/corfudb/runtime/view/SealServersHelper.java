@@ -90,9 +90,14 @@ public class SealServersHelper {
             boolean success = false;
             try {
                 success = CFUtils.getUninterruptibly(quorumFuture,
-                        TimeoutException.class, QuorumUnreachableException.class);
-            } catch (TimeoutException e) {
-                log.error("waitForChainSegmentSeal: timeout", e);
+                        NetworkException.class,
+                        TimeoutException.class,
+                        QuorumUnreachableException.class);
+            } catch (TimeoutException | NetworkException e) {
+                // A timeout exception or network exception could occur if
+                // the server is unresponsive. We ignore these servers and don't
+                // mark them as success
+                log.error("waitForChainSegmentSeal: {}", e.getClass().getSimpleName(), e);
             }
 
             int reachableServers = (int) Arrays.stream(completableFutures)

@@ -1,11 +1,15 @@
 package org.corfudb.runtime.view;
 
+import java.time.Duration;
 import lombok.Getter;
 import org.corfudb.protocols.wireprotocol.ILogData;
 import org.corfudb.protocols.wireprotocol.TokenResponse;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.exceptions.TrimmedException;
 import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.test.CorfuTest;
+import org.corfudb.test.concurrent.ConcurrentScheduler;
+import org.corfudb.test.parameters.Parameter;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -15,25 +19,18 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.corfudb.test.parameters.Param.CONCURRENCY_SOME;
+import static org.corfudb.test.parameters.Param.NUM_ITERATIONS_LOW;
+import static org.corfudb.test.parameters.Param.TIMEOUT_NORMAL;
 
 /**
  * Created by mwei on 1/8/16.
  */
-public class StreamViewTest extends AbstractViewTest {
+@CorfuTest
+public class StreamViewTest {
 
-    @Getter
-    final String defaultConfigurationString = getDefaultEndpoint();
-
-    public CorfuRuntime r;
-
-    @Before
-    public void setRuntime() throws Exception {
-        r = getDefaultRuntime().connect();
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    public void canReadWriteFromStream()
+    @CorfuTest
+    public void canReadWriteFromStream(CorfuRuntime r)
             throws Exception {
         UUID streamA = UUID.nameUUIDFromBytes("stream A".getBytes());
         byte[] testPayload = "hello world".getBytes();
@@ -41,7 +38,7 @@ public class StreamViewTest extends AbstractViewTest {
         IStreamView sv = r.getStreamsView().get(streamA);
         sv.append(testPayload);
 
-        assertThat(sv.next().getPayload(getRuntime()))
+        assertThat(sv.next().getPayload(r))
                 .isEqualTo("hello world".getBytes());
 
         assertThat(sv.next())
@@ -52,8 +49,8 @@ public class StreamViewTest extends AbstractViewTest {
      * Test that a client can call IStreamView.remainingUpTo after a prefix trim.
      * If remainingUpTo contains trimmed addresses, then they are ignored.
      */
-    @Test
-    public void testRemainingUpToWithTrim() {
+    @CorfuTest
+    public void testRemainingUpToWithTrim(CorfuRuntime runtime, CorfuRuntime runtime2) {
         StreamOptions options = StreamOptions.builder()
                 .ignoreTrimmed(true)
                 .build();
@@ -79,82 +76,80 @@ public class StreamViewTest extends AbstractViewTest {
         assertThat(entries.size()).isEqualTo((firstIter / 2));
 
         // Open the stream with a new client
-        CorfuRuntime rt2 = getNewRuntime(getDefaultNode())
-                                        .connect();
-        txStream = rt2.getStreamsView().get(ObjectsView.TRANSACTION_STREAM_ID, options);
+        txStream = runtime2.getStreamsView().get(ObjectsView.TRANSACTION_STREAM_ID, options);
         entries = txStream.remainingUpTo(Long.MAX_VALUE);
         assertThat(entries.size()).isEqualTo((firstIter / 2));
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void canReadWriteFromStreamConcurrent()
+    @CorfuTest
+    public void canReadWriteFromStreamConcurrent(CorfuRuntime r,
+        ConcurrentScheduler scheduler,
+        @Parameter(NUM_ITERATIONS_LOW) int iterations,
+        @Parameter(CONCURRENCY_SOME) int concurrency,
+        @Parameter(TIMEOUT_NORMAL) Duration timeout)
             throws Exception {
         UUID streamA = UUID.nameUUIDFromBytes("stream A".getBytes());
         byte[] testPayload = "hello world".getBytes();
 
         IStreamView sv = r.getStreamsView().get(streamA);
-        scheduleConcurrently(PARAMETERS.NUM_ITERATIONS_LOW,
+        scheduler.schedule(iterations,
                 i -> sv.append(testPayload));
-        executeScheduled(PARAMETERS.CONCURRENCY_SOME,
-                PARAMETERS.TIMEOUT_NORMAL);
+        scheduler.execute(concurrency, timeout);
 
-        scheduleConcurrently(PARAMETERS.NUM_ITERATIONS_LOW,
-                i -> assertThat(sv.next().getPayload(getRuntime()))
+        scheduler.schedule(iterations,
+                i -> assertThat(sv.next().getPayload(r))
                 .isEqualTo("hello world".getBytes()));
-        executeScheduled(PARAMETERS.CONCURRENCY_SOME,
-                PARAMETERS.TIMEOUT_NORMAL);
+        scheduler.execute(concurrency, timeout);
         assertThat(sv.next())
                 .isEqualTo(null);
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void canReadWriteFromStreamWithoutBackpointers()
+    @CorfuTest
+    public void canReadWriteFromStreamWithoutBackpointers(CorfuRuntime r,
+        ConcurrentScheduler scheduler,
+        @Parameter(CONCURRENCY_SOME) int concurrency,
+        @Parameter(NUM_ITERATIONS_LOW) int iterations,
+        @Parameter(TIMEOUT_NORMAL) Duration timeout)
             throws Exception {
         r.setBackpointersDisabled(true);
-
         UUID streamA = UUID.nameUUIDFromBytes("stream A".getBytes());
         byte[] testPayload = "hello world".getBytes();
 
         IStreamView sv = r.getStreamsView().get(streamA);
-        scheduleConcurrently(PARAMETERS.NUM_ITERATIONS_LOW, i ->
+        scheduler.schedule(iterations, i ->
                 sv.append(testPayload));
-        executeScheduled(PARAMETERS.CONCURRENCY_SOME, PARAMETERS.TIMEOUT_NORMAL);
+        scheduler.execute(concurrency, timeout);
 
-        scheduleConcurrently(PARAMETERS.NUM_ITERATIONS_LOW, i ->
-                assertThat(sv.next().getPayload(getRuntime()))
+        scheduler.schedule(iterations, i ->
+                assertThat(sv.next().getPayload(r))
                 .isEqualTo("hello world".getBytes()));
-        executeScheduled(PARAMETERS.CONCURRENCY_SOME, PARAMETERS.TIMEOUT_NORMAL);
+        scheduler.execute(concurrency, timeout);
         assertThat(sv.next())
                 .isEqualTo(null);
     }
 
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void canReadWriteFromCachedStream()
+    @CorfuTest
+    public void canReadWriteFromCachedStream(CorfuRuntime r)
             throws Exception {
-        CorfuRuntime r = getDefaultRuntime().connect()
-                .setCacheDisabled(false);
+        r.setCacheDisabled(false);
         UUID streamA = UUID.nameUUIDFromBytes("stream A".getBytes());
         byte[] testPayload = "hello world".getBytes();
 
         IStreamView sv = r.getStreamsView().get(streamA);
         sv.append(testPayload);
 
-        assertThat(sv.next().getPayload(getRuntime()))
+        assertThat(sv.next().getPayload(r))
                 .isEqualTo("hello world".getBytes());
 
         assertThat(sv.next())
                 .isEqualTo(null);
     }
 
-    @Test
-    public void canSeekOnStream()
+    @CorfuTest
+    public void canSeekOnStream(CorfuRuntime r)
         throws Exception
     {
-        CorfuRuntime r = getDefaultRuntime().connect();
         IStreamView sv = r.getStreamsView().get(
                 CorfuRuntime.getStreamID("stream  A"));
 
@@ -185,11 +180,10 @@ public class StreamViewTest extends AbstractViewTest {
                 .isEqualTo("b".getBytes());
     }
 
-    @Test
-    public void canFindInStream()
+    @CorfuTest
+    public void canFindInStream(CorfuRuntime r)
             throws Exception
     {
-        CorfuRuntime r = getDefaultRuntime().connect();
         IStreamView svA = r.getStreamsView().get(
                 CorfuRuntime.getStreamID("stream  A"));
         IStreamView svB = r.getStreamsView().get(
@@ -241,11 +235,10 @@ public class StreamViewTest extends AbstractViewTest {
                 .isEqualTo(Address.NOT_FOUND);
     }
 
-    @Test
-    public void canDoPreviousOnStream()
+    @CorfuTest
+    public void canDoPreviousOnStream(CorfuRuntime r)
             throws Exception
     {
-        CorfuRuntime r = getDefaultRuntime().connect();
         IStreamView sv = r.getStreamsView().get(
                 CorfuRuntime.getStreamID("stream  A"));
 
@@ -278,9 +271,8 @@ public class StreamViewTest extends AbstractViewTest {
                 .isEqualTo("b".getBytes());
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void streamCanSurviveOverwriteException()
+    @CorfuTest
+    public void streamCanSurviveOverwriteException(CorfuRuntime r)
             throws Exception {
         UUID streamA = CorfuRuntime.getStreamID("stream A");
         byte[] testPayload = "hello world".getBytes();
@@ -293,16 +285,15 @@ public class StreamViewTest extends AbstractViewTest {
         IStreamView sv = r.getStreamsView().get(streamA);
         sv.append(testPayload);
 
-        assertThat(sv.next().getPayload(getRuntime()))
+        assertThat(sv.next().getPayload(r))
                 .isEqualTo("hello world".getBytes());
 
         assertThat(sv.next())
                 .isEqualTo(null);
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void streamWillHoleFill()
+    @CorfuTest
+    public void streamWillHoleFill(CorfuRuntime r)
             throws Exception {
         //begin tests
         UUID streamA = CorfuRuntime.getStreamID("stream A");
@@ -315,7 +306,7 @@ public class StreamViewTest extends AbstractViewTest {
         IStreamView sv = r.getStreamsView().get(streamA);
         sv.append(testPayload);
 
-        assertThat(sv.next().getPayload(getRuntime()))
+        assertThat(sv.next().getPayload(r))
                 .isEqualTo("hello world".getBytes());
 
         assertThat(sv.next())
@@ -323,9 +314,8 @@ public class StreamViewTest extends AbstractViewTest {
     }
 
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void streamWithHoleFill()
+    @CorfuTest
+    public void streamWithHoleFill(CorfuRuntime r)
             throws Exception {
         UUID streamA = CorfuRuntime.getStreamID("stream A");
 
@@ -354,16 +344,15 @@ public class StreamViewTest extends AbstractViewTest {
         sv.append(testPayload2);
 
         //make sure we can still read the stream.
-        assertThat(sv.next().getPayload(getRuntime()))
+        assertThat(sv.next().getPayload(r))
                 .isEqualTo(testPayload);
 
-        assertThat(sv.next().getPayload(getRuntime()))
+        assertThat(sv.next().getPayload(r))
                 .isEqualTo(testPayload2);
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void prefixTrimThrowsException()
+    @CorfuTest
+    public void prefixTrimThrowsException(CorfuRuntime r)
             throws Exception {
         //begin tests
         UUID streamA = CorfuRuntime.getStreamID("stream A");
@@ -374,10 +363,10 @@ public class StreamViewTest extends AbstractViewTest {
         sv.append(testPayload);
 
         // Trim the entry
-        runtime.getAddressSpaceView().prefixTrim(0);
-        runtime.getAddressSpaceView().gc();
-        runtime.getAddressSpaceView().invalidateServerCaches();
-        runtime.getAddressSpaceView().invalidateClientCache();
+        r.getAddressSpaceView().prefixTrim(0);
+        r.getAddressSpaceView().gc();
+        r.getAddressSpaceView().invalidateServerCaches();
+        r.getAddressSpaceView().invalidateClientCache();
 
         // We should get a prefix trim exception when we try to read
         assertThatThrownBy(() -> sv.next())

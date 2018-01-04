@@ -21,6 +21,7 @@ import org.corfudb.runtime.exceptions.DataOutrankedException;
 import org.corfudb.runtime.exceptions.OverwriteException;
 import org.corfudb.runtime.view.Layout;
 import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.test.CorfuTest;
 import org.corfudb.util.serializer.Serializers;
 import org.junit.Test;
 
@@ -31,55 +32,31 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test the chain replication protocol.
+/** Test the quorum replication protocol.
  *
  * Created by mwei on 4/11/17.
  */
-public class QuorumReplicationProtocolTest extends AbstractReplicationProtocolTest {
+@CorfuTest
+public class QuorumReplicationProtocolTest
+    implements IReplicationProtocolTest<QuorumReplicationProtocol> {
 
 
     public static final UUID testClientId = UUID.nameUUIDFromBytes("TEST_CLIENT".getBytes());
 
-    /** {@inheritDoc} */
     @Override
-    IReplicationProtocol getProtocol() {
+    public QuorumReplicationProtocol getProtocol() {
         return new QuorumReplicationProtocol(new  AlwaysHoleFillPolicy());
     }
 
-    /** {@inheritDoc} */
     @Override
-    void setupNodes() {
-        addServer(SERVERS.PORT_0);
-        addServer(SERVERS.PORT_1);
-        addServer(SERVERS.PORT_2);
-
-        bootstrapAllServers(new TestLayoutBuilder()
-                .addLayoutServer(SERVERS.PORT_0)
-                .addSequencer(SERVERS.PORT_0)
-                .buildSegment()
-                .setReplicationMode(Layout.ReplicationMode.QUORUM_REPLICATION)
-                .buildStripe()
-                .addLogUnit(SERVERS.PORT_0)
-                .addLogUnit(SERVERS.PORT_1)
-                .addLogUnit(SERVERS.PORT_2)
-                .addToSegment()
-                .addToLayout()
-                .build());
-        getRuntime().setCacheDisabled(true);
-        getManagementServer(SERVERS.PORT_0).shutdown();
-        getManagementServer(SERVERS.PORT_1).shutdown();
-        getManagementServer(SERVERS.PORT_2).shutdown();
-    }
-
-
-
-
-    @Override
-    public void overwriteThrowsException()
+    @CorfuTest
+    public void overwriteThrowsException(CorfuRuntime runtime)
             throws Exception {
-        // currently we don't give full waranties if two clients race for the same position during the 1-phase quorum write.
-        // this is just assertion for wrong code, but in general this operation could do harm
-        super.overwriteThrowsException();
+        // currently we don't give full waranties if two clients race for
+        // the same position during the 1-phase quorum write.
+        // this is just assertion for wrong code, but in general this
+        // operation could do harm
+        IReplicationProtocolTest.super.overwriteThrowsException(runtime);
     }
 
 

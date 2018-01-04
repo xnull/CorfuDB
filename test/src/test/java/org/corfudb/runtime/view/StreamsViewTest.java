@@ -3,6 +3,7 @@ package org.corfudb.runtime.view;
 import lombok.Getter;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.test.CorfuTest;
 import org.junit.Test;
 
 import java.util.Collections;
@@ -13,17 +14,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Created by mwei on 2/18/16.
  */
-public class StreamsViewTest extends AbstractViewTest {
-    @Getter
-    final String defaultConfigurationString = getDefaultEndpoint();
+@CorfuTest
+public class StreamsViewTest {
 
-    @Test
-    @SuppressWarnings("unchecked")
-    public void canCopyStream()
+    @CorfuTest
+    public void canCopyStream(CorfuRuntime r)
             throws Exception {
 
         //begin tests
-        CorfuRuntime r = getDefaultRuntime().connect();
         UUID streamA = CorfuRuntime.getStreamID("stream A");
         UUID streamACopy = CorfuRuntime.getStreamID("stream A copy");
         byte[] testPayload = "hello world".getBytes();
@@ -32,7 +30,7 @@ public class StreamsViewTest extends AbstractViewTest {
         IStreamView sv = r.getStreamsView().get(streamA);
         sv.append(testPayload);
 
-        assertThat(sv.next().getPayload(getRuntime()))
+        assertThat(sv.next().getPayload(r))
                 .isEqualTo(testPayload);
         assertThat(sv.next())
                 .isEqualTo(null);
@@ -43,14 +41,14 @@ public class StreamsViewTest extends AbstractViewTest {
                         Collections.singleton(sv.getId()),
                         0).getToken().getTokenValue());
 
-        assertThat(svCopy.next().getPayload(getRuntime()))
+        assertThat(svCopy.next().getPayload(r))
                 .isEqualTo(testPayload);
         assertThat(svCopy.next())
                 .isEqualTo(null);
 
         svCopy.append(testPayloadCopy);
 
-        assertThat(svCopy.next().getPayload(getRuntime()))
+        assertThat(svCopy.next().getPayload(r))
                 .isEqualTo(testPayloadCopy);
         assertThat(svCopy.next())
                 .isEqualTo(null);

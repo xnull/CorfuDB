@@ -1,23 +1,27 @@
 package org.corfudb.util.serializer;
 
 import org.corfudb.CustomSerializer;
+import org.corfudb.test.CorfuTest;
 import org.junit.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * This test class verifies that multiple custom serializers can be registered.
  */
+@CorfuTest
 public class SerializersTest {
 
-    @Test (expected = RuntimeException.class)
+    @CorfuTest
     public void registerSerializerWithInvalidTypeTest() {
         final byte SERIALIZER_TYPE0 = 10;
         ISerializer customSerializer = new CustomSerializer(SERIALIZER_TYPE0);
-        Serializers.registerSerializer(customSerializer);
+        assertThatThrownBy(() -> Serializers.registerSerializer(customSerializer))
+            .isInstanceOf(RuntimeException.class);
     }
 
-    @Test
+    @CorfuTest
     public void registerMultipleSerializersTest() {
         final byte type1 = (byte) 11;
         final byte type2 = (byte) 12;
