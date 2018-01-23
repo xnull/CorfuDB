@@ -386,9 +386,8 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
     private void channelConnectionFutureHandler(@Nonnull ChannelFuture future,
                                                 @Nonnull Bootstrap bootstrap) {
         if (future.isSuccess()) {
-            // When the channel connection succeeds, set this channel as active
-            channel = future.channel();
-            // And register a future to reconnect in case we get disconnected
+            // Register a future to reconnect in case we get disconnected
+            // The channel connection will happen during the handshake
             addReconnectionOnCloseFuture(channel, bootstrap);
             log.info("connectAsync[{}]: Channel connected.", node);
         } else {
@@ -651,6 +650,7 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
         if (evt.equals(ClientHandshakeEvent.CONNECTED)) {
             // Handshake successful. Complete the connection future to allow
             // clients to proceed.
+            channel = ctx.channel();
             connectionFuture.complete(null);
         } else if (evt.equals(ClientHandshakeEvent.FAILED) && connectionFuture.isDone()) {
             // Handshake failed. If the current completion future is complete,
