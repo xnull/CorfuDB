@@ -977,37 +977,39 @@ public class CorfuRuntime {
     /** Log the version information for each server on the console.
      *  Does not cause a failure in case of a version mismatch.
      */
-
-
     @SuppressWarnings("unchecked")
     private void logServerVersions() {
-            List<CompletableFuture<VersionInfo>> versions =
-                CFUtils.getUninterruptibly(layout).getLayoutServers()
-                    .stream().map(this::getRouter)
-                    .map(r -> r.getClient(BaseClient.class))
-                    .map(BaseClient::getVersionInfo)
-                    .collect(Collectors.toList());
+        // Get a map of servers to futures with version information.
+        Map<String, CompletableFuture<VersionInfo>> futures =
+            CFUtils.getUninterruptibly(layout).getAllServers().stream()
+                .collect(Collectors.toMap(
+                    // Key = server string
+                    s -> s,
+                    // Value = VersionInfo future
+                    s -> getRouter(s).getClient(BaseClient.class).getVersionInfo()));
 
-            for (CompletableFuture<VersionInfo> versionCf : versions) {
-                try {
-                    final VersionInfo version = CFUtils.getUninterruptibly(versionCf,
+        // Print out each version information.
+        futures.forEach((server, versionFuture) -> {
+            try {
+                VersionInfo version = CFUtils.getUninterruptibly(versionFuture,
                         TimeoutException.class,
-                        NetworkException.class,
-                        ShutdownException.class);
-                    if (version.getVersion() == null) {
-                        log.error("Unexpected server version, server is too old to return"
-                            + " version information");
-                    } else if (!version.getVersion().equals(getVersionString())) {
-                        log.error("connect: expected version {}, but server version is {}",
-                            getVersionString(), version.getVersion());
-                    } else {
-                        log.info("connect: client version {}, server version is {}",
-                            getVersionString(), version.getVersion());
-                    }
-                } catch (TimeoutException | NetworkException | ShutdownException e) {
-                    log.error("connect: failed to get version", e);
+                        NetworkException.class);
+                if (version.getVersion() == null) {
+                    log.error("logServerVersions[{}]: Unexpected version, "
+                            + "server is too old to return version information", server);
+                } else if (!version.getVersion().equals(getVersionString())) {
+                    log.error("logServerVersions[{}]: expected version {}, "
+                            + "but server version is {}",
+                            server, getVersionString(), version.getVersion());
+                } else {
+                    log.info("logServerVersions[{}]: client version {}, server version is {}",
+                            server, getVersionString(), version.getVersion());
                 }
+            } catch (TimeoutException | NetworkException e) {
+                log.warn("logServerVersions[{}]: Attempted to get server version "
+                        + "but hit an exception", server, e);
             }
+        });
     }
 
 

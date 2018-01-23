@@ -373,7 +373,7 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
                 .setFailure(new ShutdownException("Runtime already shutdown!"));
         }
         // Use the bootstrap to create a new channel.
-        ChannelFuture f = bootstrap.connect(node.getHost(), node.getPort());
+        ChannelFuture f = bootstrap.connect(node.getSocketAddress());
         f.addListener((ChannelFuture cf) -> channelConnectionFutureHandler(cf, bootstrap));
         return f;
     }
@@ -395,7 +395,8 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
             // Otherwise, the connection failed. If we're not shutdown, try reconnecting after
             // a sleep period.
             if (!shutdown) {
-                log.info("connectAsync[{}]: Channel connection failed, reconnecting...", node);
+                log.info("connectAsync[{}]: Channel connection failed, reconnecting...",
+                        node, future.cause());
                 Sleep.sleepUninterruptibly(parameters.getConnectionRetryRate());
                 // Call connect, which will retry the call again.
                 // Note that this is not recursive, because it is called in the

@@ -49,6 +49,7 @@ public class LayoutManagementViewTest extends AbstractViewTest{
         // Remove one node from a three node cluster
         r.invalidateLayout();
         Layout layout = new Layout(r.getLayoutView().getLayout());
+        layout.setRuntime(runtime);
         Layout expectedLayout = new LayoutBuilder(layout)
                 .removeLayoutServer(getEndpoint(SERVERS.PORT_2))
                 .removeSequencerServer(getEndpoint(SERVERS.PORT_2))

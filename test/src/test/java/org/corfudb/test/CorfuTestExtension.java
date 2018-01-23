@@ -602,7 +602,6 @@ public class CorfuTestExtension implements
                 f.setAccessible(true);
                 Layout l = (Layout) f.get(extensionContext.getRequiredTestInstance());
                 context.setCurrentLayout(l);
-                context.setManagementLayout(l);
             } catch (IllegalAccessException e) {
                 throw new ParameterResolutionException("Illegal access exception");
             }

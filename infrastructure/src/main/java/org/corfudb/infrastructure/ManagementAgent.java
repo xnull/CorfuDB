@@ -175,6 +175,7 @@ public class ManagementAgent {
         // This thread pool is utilized to dispatch one time recovery and sequencer bootstrap tasks.
         // One these tasks finish successfully, they initiate the detection tasks.
         this.initializationTaskThread = new Thread(this::initializationTask);
+        this.initializationTaskThread.setName(serverContext.getThreadPrefix() + "AgentInit");
         this.initializationTaskThread.setUncaughtExceptionHandler((thread, throwable) -> {
             log.error("Error in initialization task: {}", throwable);
         });
@@ -354,8 +355,9 @@ public class ManagementAgent {
         // or has it been marked as unresponsive. If either is true, it should not
         // attempt to change layout.
         Layout layout = serverContext.getManagementLayout();
-        if (!layout.getAllServers().contains(getLocalEndpoint())
-                || layout.getUnresponsiveServers().contains(getLocalEndpoint())) {
+        if (layout.getAllServers().stream().noneMatch(serverContext.getNodeLocator()::isSameNode)
+                || layout.getUnresponsiveServers().stream()
+                        .anyMatch(serverContext.getNodeLocator()::isSameNode)) {
             log.debug("This Server is not a part of the active layout. "
                     + "Aborting reconfiguration handling.");
             return false;

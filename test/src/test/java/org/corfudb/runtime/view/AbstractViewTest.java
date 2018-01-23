@@ -431,7 +431,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
      * @return      The endpoint string.
      */
     public String getEndpoint(int port) {
-        return "test:" + port;
+        return "local://test:" + port;
     }
 
     /**

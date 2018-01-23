@@ -115,10 +115,10 @@ public class LayoutSealTest {
             .isInstanceOf(QuorumUnreachableException.class);
 
         assertThat(server0).hasEpoch(2);
-        assertThat(server1).hasEpoch(1);
+        assertThat(server1).hasEpoch(0);
         assertThat(server2).hasEpoch(2);
-        assertThat(server3).hasEpoch(1);
-        assertThat(server4).hasEpoch(1);
+        assertThat(server3).hasEpoch(0);
+        assertThat(server4).hasEpoch(0);
     }
 
 
@@ -177,7 +177,7 @@ public class LayoutSealTest {
         assertThat(server0).hasEpoch(2);
         assertThat(server1).hasEpoch(2);
         assertThat(server2).hasEpoch(2);
-        assertThat(server3).hasEpoch(1);
+        assertThat(server3).hasEpoch(0);
         assertThat(server4).hasEpoch(2);
     }
 }

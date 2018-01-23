@@ -314,7 +314,7 @@ public class ClusterReconfigIT extends AbstractIT {
         Process corfuServer_2 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_1);
         Process corfuServer_3 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_2);
         List<Process> corfuServers = Arrays.asList(corfuServer_1, corfuServer_2, corfuServer_3);
-        Thread.sleep(PARAMETERS.TIMEOUT_SHORT.toMillis());
+        Thread.sleep(PARAMETERS.TIMEOUT_NORMAL.toMillis());
         final Layout layout = get3NodeLayout();
         bootstrapCluster(layout);
 

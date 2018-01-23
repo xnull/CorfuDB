@@ -290,12 +290,14 @@ public class ManagementViewTest extends AbstractViewTest {
 
         // PART 1.
         // Prevent ENDPOINT_1 from sealing.
-        addClientRule(getManagementServer(SERVERS.PORT_0).getManagementAgent().getCorfuRuntime(), SERVERS.ENDPOINT_1,
+        addClientRule(getManagementServer(SERVERS.PORT_0).getManagementAgent().getCorfuRuntime(),
+            "test:" + SERVERS.PORT_1,
                 new TestRule()
                         .matches(corfuMsg -> corfuMsg.getMsgType().equals(CorfuMsgType.SET_EPOCH))
                         .drop());
         // Simulate ENDPOINT_2 failure from ENDPOINT_0 (only Management Server)
-        addClientRule(getManagementServer(SERVERS.PORT_0).getManagementAgent().getCorfuRuntime(), SERVERS.ENDPOINT_2,
+        addClientRule(getManagementServer(SERVERS.PORT_0).getManagementAgent().getCorfuRuntime(),
+            "test:" + SERVERS.PORT_2,
                 new TestRule().matches(corfuMsg -> true).drop());
 
         // Adding a rule on SERVERS.PORT_1 to toggle the flag when it sends the
@@ -757,7 +759,8 @@ public class ManagementViewTest extends AbstractViewTest {
 
         Layout layout = getManagementTestLayout();
 
-        addClientRule(corfuRuntime, SERVERS.ENDPOINT_0, new TestRule().always().drop());
+        addClientRule(corfuRuntime, "test:" +  SERVERS.PORT_0,
+            new TestRule().always().drop());
         layout.setEpoch(2L);
         layout.moveServersToEpoch();
         corfuRuntime.getLayoutView().updateLayout(layout, 1L);
