@@ -3,9 +3,11 @@ package org.corfudb.runtime.view;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.corfudb.test.assertions.CorfuAssertions.assertThat;
+import static org.corfudb.test.assertions.CorfuAssertions.assertThatQuorumOf;
 import static org.corfudb.test.util.ServerTestUtil.disconnectAndBlacklistClientFromServer;
 
 import org.corfudb.infrastructure.CorfuServer;
+import org.corfudb.infrastructure.CorfuServerAssert;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.exceptions.QuorumUnreachableException;
 import org.corfudb.runtime.view.Layout.LayoutSegment;
@@ -80,11 +82,9 @@ public class LayoutSealTest {
         assertThatCode(newLayout::moveServersToEpoch)
             .doesNotThrowAnyException();;
 
-        assertThat(server0).hasEpoch(2);
-        assertThat(server1).hasEpoch(2);
-        assertThat(server2).hasEpoch(2);
-        assertThat(server3).hasEpoch(2);
-        assertThat(server4).hasEpoch(2);
+        // moveServersToEpoch is currently only guaranteed to move a quorum of servers
+        assertThatQuorumOf(server0, server1, server2, server3, server4)
+            .hasEpoch(2);
     }
 
     /**
@@ -142,11 +142,9 @@ public class LayoutSealTest {
         assertThatCode(l::moveServersToEpoch)
             .doesNotThrowAnyException();
 
-        assertThat(server0).hasEpoch(2);
-        assertThat(server1).hasEpoch(2);
-        assertThat(server2).hasEpoch(2);
-        assertThat(server3).hasEpoch(2);
-        assertThat(server4).hasEpoch(2);
+        // moveServersToEpoch is currently only guaranteed to move a quorum of servers
+        assertThatQuorumOf(server0, server1, server2, server3, server4)
+            .hasEpoch(2);
     }
 
     /**
