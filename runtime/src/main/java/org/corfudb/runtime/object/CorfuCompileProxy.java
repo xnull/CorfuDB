@@ -24,13 +24,12 @@ import org.corfudb.runtime.exceptions.NetworkException;
 import org.corfudb.runtime.exceptions.TransactionAbortedException;
 import org.corfudb.runtime.exceptions.TrimmedException;
 import org.corfudb.runtime.exceptions.TrimmedUpcallException;
-import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuError;
-import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuInterruptedError;
 import org.corfudb.runtime.object.transactions.AbstractTransactionalContext;
 import org.corfudb.runtime.object.transactions.TransactionalContext;
 import org.corfudb.util.MetricsUtils;
 import org.corfudb.util.Sleep;
 import org.corfudb.util.Utils;
+import org.corfudb.util.auditor.Auditor;
 import org.corfudb.util.serializer.ISerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -232,8 +231,12 @@ public class CorfuCompileProxy<T> implements ICorfuSMRProxyInternal<T> {
             try {
                 // We generate an entry to avoid exposing the serializer to the tx context.
                 SMREntry entry = new SMREntry(smrUpdateFunction, args, serializer);
-                return TransactionalContext.getCurrentContext()
+                final long updateAddr = TransactionalContext.getCurrentContext()
                         .logUpdate(this, entry, conflictObject);
+                Auditor.INSTANCE.addEvent(smrUpdateFunction,
+                        String.valueOf(getIdentityHashOfUnderlyingObject()),
+                        String.valueOf(Thread.currentThread().getId()), args);
+                return updateAddr;
             } catch (Exception e) {
                 log.warn("Update[{}] Exception: {}", this, e);
                 this.abortTransaction(e);
@@ -247,6 +250,9 @@ public class CorfuCompileProxy<T> implements ICorfuSMRProxyInternal<T> {
         log.trace("Update[{}] {}@{} ({}) conflictObj={}",
                 this, smrUpdateFunction, address, args, conflictObject);
         correctnessLogger.trace("Version, {}", address);
+        Auditor.INSTANCE.addEvent(smrUpdateFunction,
+                String.valueOf(getIdentityHashOfUnderlyingObject()),
+                String.valueOf(Thread.currentThread().getId()), args);
         return address;
     }
 
@@ -468,6 +474,10 @@ public class CorfuCompileProxy<T> implements ICorfuSMRProxyInternal<T> {
     @Override
     public String toString() {
         return type.getSimpleName() + "[" + Utils.toReadableId(streamID) + "]";
+    }
+
+    public int getIdentityHashOfUnderlyingObject() {
+        return System.identityHashCode(underlyingObject.object);
     }
 
     private void abortTransaction(Exception e) {

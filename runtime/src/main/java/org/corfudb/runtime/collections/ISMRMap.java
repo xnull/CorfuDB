@@ -105,7 +105,11 @@ public interface ISMRMap<K, V> extends Map<K, V>, ISMRObject {
      *                          previous value in the map.
      */
     default V undoPutRecord(ISMRMap<K,V> previousState, K key, V value) {
-        return previousState.get(key);
+        return previousState.getUninstrumented(key);
+    }
+
+    default V getUninstrumented(K key) {
+        return get(key);
     }
 
     /** Undo a put, given the current state of the map, an undo record
@@ -119,11 +123,15 @@ public interface ISMRMap<K, V> extends Map<K, V>, ISMRObject {
      */
     default void undoPut(ISMRMap<K,V> map, V undoRecord, K key, V value) {
         if (undoRecord == null) {
-            map.remove(key);
+            map.removeUninstrumented(key);
         } else {
             map.put(key, undoRecord);
         }
     }
+
+    default V removeUninstrumented(K key) {
+        return remove(key);
+    };
 
     /**
      * {@jnheritDoc}
@@ -156,7 +164,7 @@ public interface ISMRMap<K, V> extends Map<K, V>, ISMRObject {
      */
     default void undoRemove(ISMRMap<K,V> map, V undoRecord, K key) {
         if (undoRecord == null) {
-            map.remove(key);
+            map.removeUninstrumented(key);
         } else {
             map.put(key, undoRecord);
         }
@@ -215,7 +223,7 @@ public interface ISMRMap<K, V> extends Map<K, V>, ISMRObject {
                             Map<? extends K, ? extends V> m) {
         undoRecord.entrySet().forEach(e -> {
             if (e.getValue() == UndoNullable.NULL) {
-                map.remove(e.getKey());
+                map.removeUninstrumented(e.getKey());
             } else {
                 map.put(e.getKey(), e.getValue());
             }

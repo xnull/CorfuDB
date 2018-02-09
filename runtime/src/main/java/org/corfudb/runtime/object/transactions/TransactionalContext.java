@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import lombok.extern.slf4j.Slf4j;
+import org.corfudb.util.auditor.Auditor;
+import org.corfudb.util.auditor.Event;
 
 /** A class which allows access to transactional contexts, which manage
  * transactions. The static methods of this class provide access to the
@@ -77,6 +79,8 @@ public class TransactionalContext {
     public static AbstractTransactionalContext newContext(AbstractTransactionalContext context) {
         log.debug("TX begin[{}]", context);
         getTransactionStack().addFirst(context);
+        Auditor.INSTANCE.addEvent(Event.Type.TXBEGIN.getTypeValue(),
+                String.valueOf(Thread.currentThread().getId()));
         return context;
     }
 
