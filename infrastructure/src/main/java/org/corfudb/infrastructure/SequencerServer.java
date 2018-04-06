@@ -127,17 +127,6 @@ public class SequencerServer extends AbstractServer {
     @Setter
     private volatile long readyStateEpoch = -1;
 
-    @Override
-    public boolean isServerReadyToHandleMsg(CorfuMsg msg) {
-        if ((readyStateEpoch != serverContext.getServerEpoch())
-                && (!msg.getMsgType().equals(CorfuMsgType.BOOTSTRAP_SEQUENCER))) {
-            log.warn("Rejecting msg at sequencer : sequencerStateEpoch:{}, serverEpoch:{}, "
-                    + "msg:{}", readyStateEpoch, serverContext.getServerEpoch(), msg);
-            return false;
-        }
-        return true;
-    }
-
     /**
      * Returns a new SequencerServer.
      * @param serverContext context object providing parameters and objects
