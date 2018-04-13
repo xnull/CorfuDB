@@ -1,10 +1,27 @@
 package org.corfudb.runtime.object;
 
-import static java.lang.Long.min;
-
 import com.codahale.metrics.Counter;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.corfudb.protocols.logprotocol.SMREntry;
+import org.corfudb.protocols.wireprotocol.TxResolutionInfo;
+import org.corfudb.runtime.CorfuRuntime;
+import org.corfudb.runtime.exceptions.AbortCause;
+import org.corfudb.runtime.exceptions.NetworkException;
+import org.corfudb.runtime.exceptions.TransactionAbortedException;
+import org.corfudb.runtime.exceptions.TrimmedException;
+import org.corfudb.runtime.exceptions.TrimmedUpcallException;
+import org.corfudb.runtime.object.transactions.AbstractTransactionalContext;
+import org.corfudb.runtime.object.transactions.TransactionalContext;
+import org.corfudb.util.MetricsUtils;
+import org.corfudb.util.Sleep;
+import org.corfudb.util.Utils;
+import org.corfudb.util.auditor.Auditor;
+import org.corfudb.util.serializer.ISerializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Constructor;
 import java.util.Collections;
@@ -13,29 +30,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import org.corfudb.protocols.logprotocol.SMREntry;
-import org.corfudb.protocols.wireprotocol.Token;
-import org.corfudb.protocols.wireprotocol.TxResolutionInfo;
-import org.corfudb.runtime.CorfuRuntime;
-import org.corfudb.runtime.exceptions.AbortCause;
-import org.corfudb.runtime.exceptions.NetworkException;
-import org.corfudb.runtime.exceptions.TransactionAbortedException;
-import org.corfudb.runtime.exceptions.TrimmedException;
-import org.corfudb.runtime.exceptions.TrimmedUpcallException;
-import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuError;
-import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuInterruptedError;
-import org.corfudb.runtime.object.transactions.AbstractTransactionalContext;
-import org.corfudb.runtime.object.transactions.TransactionalContext;
-import org.corfudb.runtime.view.Address;
-import org.corfudb.util.MetricsUtils;
-import org.corfudb.util.Sleep;
-import org.corfudb.util.Utils;
-import org.corfudb.util.serializer.ISerializer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static java.lang.Long.min;
 
 /**
  * In the Corfu runtime, on top of a stream,
@@ -235,8 +230,18 @@ public class CorfuCompileProxy<T> implements ICorfuSMRProxyInternal<T> {
             try {
                 // We generate an entry to avoid exposing the serializer to the tx context.
                 SMREntry entry = new SMREntry(smrUpdateFunction, args, serializer);
-                return TransactionalContext.getCurrentContext()
+
+                final long startTime = System.nanoTime();
+                final long updateAddr = TransactionalContext.getCurrentContext()
                         .logUpdate(this, entry, conflictObject);
+                final long duration = System.nanoTime() - startTime;
+
+                Auditor.INSTANCE.addEvent(smrUpdateFunction,
+                        String.valueOf(getIdentityHashOfUnderlyingObject()),
+                        String.valueOf(Thread.currentThread().getId()),
+                        duration,
+                        args);
+                return updateAddr;
             } catch (Exception e) {
                 log.warn("Update[{}] Exception: {}", this, e);
                 this.abortTransaction(e);
@@ -246,10 +251,20 @@ public class CorfuCompileProxy<T> implements ICorfuSMRProxyInternal<T> {
         // If we aren't in a transaction, we can just write the modification.
         // We need to add the acquired token into the pending upcall list.
         SMREntry smrEntry = new SMREntry(smrUpdateFunction, args, serializer);
+
+        final long startTime = System.nanoTime();
         long address = underlyingObject.logUpdate(smrEntry, keepUpcallResult);
+        final long duration = System.nanoTime() - startTime;
+
         log.trace("Update[{}] {}@{} ({}) conflictObj={}",
                 this, smrUpdateFunction, address, args, conflictObject);
         correctnessLogger.trace("Version, {}", address);
+
+        Auditor.INSTANCE.addEvent(smrUpdateFunction,
+                String.valueOf(getIdentityHashOfUnderlyingObject()),
+                String.valueOf(Thread.currentThread().getId()),
+                duration,
+                args);
         return address;
     }
 
@@ -471,6 +486,10 @@ public class CorfuCompileProxy<T> implements ICorfuSMRProxyInternal<T> {
     @Override
     public String toString() {
         return type.getSimpleName() + "[" + Utils.toReadableId(streamID) + "]";
+    }
+
+    public int getIdentityHashOfUnderlyingObject() {
+        return System.identityHashCode(underlyingObject.object);
     }
 
     private void abortTransaction(Exception e) {

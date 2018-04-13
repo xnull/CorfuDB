@@ -1,13 +1,14 @@
 package org.corfudb.runtime.collections;
 
 import com.google.common.collect.ImmutableMap;
-import java.util.Collection;
-import java.util.Map;
-import java.util.Set;
 import org.corfudb.annotations.Accessor;
 import org.corfudb.annotations.ConflictParameter;
 import org.corfudb.annotations.Mutator;
 import org.corfudb.annotations.MutatorAccessor;
+
+import java.util.Collection;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Created by mwei on 1/9/16.
@@ -105,7 +106,11 @@ public interface ISMRMap<K, V> extends Map<K, V>, ISMRObject {
      *                          previous value in the map.
      */
     default V undoPutRecord(ISMRMap<K,V> previousState, K key, V value) {
-        return previousState.get(key);
+        return previousState.getUninstrumented(key);
+    }
+
+    default V getUninstrumented(K key) {
+        return get(key);
     }
 
     /** Undo a put, given the current state of the map, an undo record
@@ -145,7 +150,7 @@ public interface ISMRMap<K, V> extends Map<K, V>, ISMRObject {
      *                          previous value in the map.
      */
     default V undoRemoveRecord(ISMRMap<K,V> previousState, K key) {
-        return previousState.get(key);
+        return previousState.getUninstrumented(key);
     }
 
     /** Undo a remove, given the current state of the map, an undo record

@@ -1,7 +1,5 @@
 package org.corfudb.runtime.view;
 
-import com.sun.xml.internal.bind.v2.TODO;
-
 import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
@@ -28,6 +26,8 @@ import org.corfudb.runtime.object.transactions.TransactionBuilder;
 import org.corfudb.runtime.object.transactions.TransactionType;
 import org.corfudb.runtime.object.transactions.TransactionalContext;
 import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.util.auditor.Auditor;
+import org.corfudb.util.auditor.Event;
 import org.corfudb.util.serializer.Serializers;
 
 /**
@@ -148,6 +148,8 @@ public class ObjectsView extends AbstractView {
                     context.getTransactionID(), context.getSnapshotTimestamp());
             context.abortTransaction(new TransactionAbortedException(
                     txInfo, null, AbortCause.USER, context));
+            Auditor.INSTANCE.addEvent(Event.Type.TXABORT.getTypeValue(),
+                    String.valueOf(Thread.currentThread().getId()));
             TransactionalContext.removeContext();
         }
     }
@@ -181,7 +183,10 @@ public class ObjectsView extends AbstractView {
             long totalTime = System.currentTimeMillis() - context.getStartTime();
             log.trace("TXEnd[{}] time={} ms", context, totalTime);
             try {
-                return TransactionalContext.getCurrentContext().commitTransaction();
+                final long commitTransaction = TransactionalContext.getCurrentContext().commitTransaction();
+                Auditor.INSTANCE.addEvent(Event.Type.TXCOMMIT.getTypeValue(),
+                        String.valueOf(Thread.currentThread().getId()));
+                return commitTransaction;
             } catch (TransactionAbortedException e) {
                 log.warn("TXEnd[{}] Aborted Exception {}", context, e);
                 TransactionalContext.getCurrentContext().abortTransaction(e);
