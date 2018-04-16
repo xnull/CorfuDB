@@ -101,6 +101,9 @@ public enum CorfuMsgType {
     ERROR_SERVER_EXCEPTION(200, new TypeToken<CorfuPayloadMsg<ExceptionMsg>>() {}, true),
     ERROR_SHUTDOWN_EXCEPTION(201, TypeToken.of(CorfuMsg.class), true),
 
+    // Test filter messages
+    TEST_FILTER_MSG(300, new TypeToken<CorfuPayloadMsg<NettyMsgTestFilter>>() {}, true),
+
     // Handshake Messages
     HANDSHAKE_INITIATE(80, new TypeToken<CorfuPayloadMsg<HandshakeMsg>>() {}, true),
     HANDSHAKE_RESPONSE(81, new TypeToken<CorfuPayloadMsg<HandshakeResponse>>() {}, true)

@@ -81,7 +81,7 @@ public class CorfuServer {
                     + "<truststore_password_file>] [-b] [-g -o <username_file> -j <password_file>] "
                     + "[-k <seqcache>] [-T <threads>] [-i <channel-implementation>] [-H <seconds>] "
                     + "[-I <cluster-id>] [-x <ciphers>] [-z <tls-protocols>]] [-P <prefix>]"
-                    + " [--agent] <port>\n"
+                    + " [--agent] [--test] <port>\n"
                     + "\n"
                     + "Options:\n"
                     + " -l <path>, --log-path=<path>                                             "
@@ -173,6 +173,7 @@ public class CorfuServer {
                     + "                                                                          "
                     + "              [default: TLSv1.1,TLSv1.2].\n"
                     + " --agent      Run with byteman agent to enable runtime code injection.\n  "
+                    + " --test       Run with test handler to allow filtering of messages.\n"
                     + " -h, --help                                                               "
                     + "              Show this screen\n"
                     + " --version                                                                "
@@ -457,6 +458,9 @@ public class CorfuServer {
                                 + GitRepositoryState.getRepositoryState().commitIdAbbrev + ")",
                         context.getServerConfig(String.class, "--HandshakeTimeout")));
                 // Route the message to the server class.
+                if ((Boolean) context.getServerConfig().get("--test")) {
+                    ch.pipeline().addLast(new TestInboundHandler());
+                }
                 ch.pipeline().addLast(router);
             }
         };
