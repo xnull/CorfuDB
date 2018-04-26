@@ -112,8 +112,9 @@ public class AbstractCorfuTest {
                             testThread.start();
 
                             // Generate a timeout
+                            final Duration d = Duration.ofMinutes(10L);
                             CompletableFuture<Throwable> timeoutCompletion =
-                                CFUtils.within(testCompletion, PARAMETERS.TIMEOUT_LONG);
+                                CFUtils.within(testCompletion, d);
                             Throwable t;
                             try {
                                 t = timeoutCompletion.join();

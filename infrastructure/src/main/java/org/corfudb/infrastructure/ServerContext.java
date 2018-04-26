@@ -5,9 +5,15 @@ import com.codahale.metrics.MetricRegistry;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.netty.channel.EventLoopGroup;
 import java.time.Duration;
-import java.util.*;
 
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.locks.StampedLock;
+
 import javax.annotation.Nonnull;
 import lombok.Getter;
 import lombok.Setter;
@@ -119,6 +125,10 @@ public class ServerContext implements AutoCloseable {
     @Getter
     public static final MetricRegistry metrics = new MetricRegistry();
 
+    private final StampedLock serverEpochLock;
+    private final StampedLock managementLayoutLock;
+
+    private volatile long cachedServerEpoch = 0;
     /**
      * Returns a new ServerContext.
      *
@@ -128,11 +138,18 @@ public class ServerContext implements AutoCloseable {
         this.serverConfig = serverConfig;
         this.dataStore = new DataStore(serverConfig);
         generateNodeId();
-        this.serverRouter = serverRouter;
         this.failureDetector = new FailureDetector();
         this.healingDetector = new HealingDetector();
         this.failureHandlerPolicy = new ConservativeFailureHandlerPolicy();
         this.healingHandlerPolicy = new SequencerHealingPolicy();
+
+        Long epoch = dataStore.get(Long.class, PREFIX_EPOCH, KEY_EPOCH);
+        if (epoch != null) {
+            cachedServerEpoch = epoch;
+        }
+
+        this.serverEpochLock = new StampedLock();
+        this.managementLayoutLock = new StampedLock();
 
         // Setup the netty event loops. In tests, these loops may be provided by
         // a test framework to save resources.
@@ -312,9 +329,19 @@ public class ServerContext implements AutoCloseable {
     /**
      * The epoch of this router. This is managed by the base server implementation.
      */
-    public synchronized long getServerEpoch() {
-        Long epoch = dataStore.get(Long.class, PREFIX_EPOCH, KEY_EPOCH);
-        return epoch == null ? 0 : epoch;
+    public long getServerEpoch() {
+        return cachedServerEpoch;
+//        long stamp = serverEpochLock.tryOptimisticRead();
+//        Long epoch = dataStore.get(Long.class, PREFIX_EPOCH, KEY_EPOCH);
+//        if (!serverEpochLock.validate(stamp)) {
+//            stamp = serverEpochLock.readLock();
+//            try {
+//                epoch = dataStore.get(Long.class, PREFIX_EPOCH, KEY_EPOCH);
+//            } finally {
+//                serverEpochLock.unlockRead(stamp);
+//            }
+//        }
+//        return epoch == null ? 0 : epoch;
     }
 
     /**
@@ -322,16 +349,23 @@ public class ServerContext implements AutoCloseable {
      *
      * @param serverEpoch the epoch to set
      */
-    public synchronized void setServerEpoch(long serverEpoch, IServerRouter r) {
-        Long lastEpoch = dataStore.get(Long.class, PREFIX_EPOCH, KEY_EPOCH);
-        if (lastEpoch == null || lastEpoch < serverEpoch) {
-            dataStore.put(Long.class, PREFIX_EPOCH, KEY_EPOCH, serverEpoch);
-            r.setServerEpoch(serverEpoch);
-        } else if (serverEpoch == lastEpoch) {
-            // Setting to the same epoch, don't need to do anything.
-        } else {
-            // Regressing, throw an exception.
-            throw new WrongEpochException(lastEpoch);
+    public void setServerEpoch(long serverEpoch, IServerRouter r) {
+        long stamp = serverEpochLock.writeLock();
+        try {
+            // TODO: Use cached epoch instead.
+            Long lastEpoch = dataStore.get(Long.class, PREFIX_EPOCH, KEY_EPOCH);
+            if (lastEpoch == null || lastEpoch < serverEpoch) {
+                cachedServerEpoch = serverEpoch;
+                dataStore.put(Long.class, PREFIX_EPOCH, KEY_EPOCH, serverEpoch);
+                r.setServerEpoch(serverEpoch);
+            } else if (serverEpoch == lastEpoch) {
+                // Setting to the same epoch, don't need to do anything.
+            } else {
+                // Regressing, throw an exception.
+                throw new WrongEpochException(lastEpoch);
+            }
+        } finally {
+            serverEpochLock.unlockWrite(stamp);
         }
     }
 
@@ -388,23 +422,29 @@ public class ServerContext implements AutoCloseable {
      *
      * @param layout Layout to be persisted
      */
-    public synchronized void saveManagementLayout(Layout layout) {
-        // Cannot update with a null layout.
-        if (layout == null) {
-            log.warn("saveManagementLayout: Attempted to update with null layout");
-            return;
-        }
-        Layout currentLayout = getManagementLayout();
-        // Update only if new layout has a higher epoch than the existing layout.
-        if (currentLayout == null || layout.getEpoch() > currentLayout.getEpoch()) {
-            // Persisting this new updated layout
-            dataStore.put(Layout.class, PREFIX_MANAGEMENT, MANAGEMENT_LAYOUT, layout);
-            log.info("saveManagementLayout: Updated to new layout at epoch {}",
-                    getManagementLayout().getEpoch());
-        } else {
-            log.debug("saveManagementLayout: "
-                            + "Ignoring layout because new epoch {} <= old epoch {}",
-                    layout.getEpoch(), currentLayout.getEpoch());
+    public void saveManagementLayout(Layout layout) {
+        long stamp = managementLayoutLock.writeLock();
+        try {
+            // Cannot update with a null layout.
+            if (layout == null) {
+                log.warn("saveManagementLayout: Attempted to update with null layout");
+                return;
+            }
+            Layout currentLayout =
+                    dataStore.get(Layout.class, PREFIX_MANAGEMENT, MANAGEMENT_LAYOUT);
+            // Update only if new layout has a higher epoch than the existing layout.
+            if (currentLayout == null || layout.getEpoch() > currentLayout.getEpoch()) {
+                // Persisting this new updated layout
+                dataStore.put(Layout.class, PREFIX_MANAGEMENT, MANAGEMENT_LAYOUT, layout);
+                log.info("saveManagementLayout: Updated to new layout at epoch {}",
+                        layout.getEpoch());
+            } else {
+                log.debug("saveManagementLayout: "
+                                + "Ignoring layout because new epoch {} <= old epoch {}",
+                        layout.getEpoch(), currentLayout.getEpoch());
+            }
+        } finally {
+            managementLayoutLock.unlockWrite(stamp);
         }
     }
 
@@ -413,8 +453,18 @@ public class ServerContext implements AutoCloseable {
      *
      * @return The last persisted layout
      */
-    public synchronized Layout getManagementLayout() {
-        return dataStore.get(Layout.class, PREFIX_MANAGEMENT, MANAGEMENT_LAYOUT);
+    public Layout getManagementLayout() {
+        long stamp = managementLayoutLock.tryOptimisticRead();
+        Layout layout = dataStore.get(Layout.class, PREFIX_MANAGEMENT, MANAGEMENT_LAYOUT);
+        if (!managementLayoutLock.validate(stamp)) {
+            stamp = managementLayoutLock.readLock();
+            try {
+                layout = dataStore.get(Layout.class, PREFIX_MANAGEMENT, MANAGEMENT_LAYOUT);
+            } finally {
+                managementLayoutLock.unlockRead(stamp);
+            }
+        }
+        return layout;
     }
 
     /** Get a new "boss" group, which services (accepts) incoming connections.

@@ -4,10 +4,14 @@ import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 
+import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinWorkerThread;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -80,6 +84,8 @@ public class NettyServerRouter extends ChannelInboundHandlerAdapter
             new ForkJoinPool(Runtime.getRuntime().availableProcessors() * 2,
                     new ServerThreadFactory(),
                     NettyServerRouter::handleUncaughtException, true);
+
+    private final ExecutorService sequencerWorker = Executors.newFixedThreadPool(2);
 
     /**
      * This map stores the mapping from message type to netty server handler.
@@ -155,6 +161,10 @@ public class NettyServerRouter extends ChannelInboundHandlerAdapter
         return true;
     }
 
+    Set<CorfuMsgType> seqMsgs = new HashSet<>(Arrays.asList(CorfuMsgType.TOKEN_REQ,
+            CorfuMsgType.BOOTSTRAP_SEQUENCER,
+            CorfuMsgType.SEQUENCER_TRIM_REQ));
+
     /**
      * Handle an incoming message read on the channel.
      *
@@ -179,17 +189,32 @@ public class NettyServerRouter extends ChannelInboundHandlerAdapter
                         log.trace("Message routed to {}: {}", handler.getClass().getSimpleName(),
                                 msg);
                     }
-                    handlerWorkers.submit(() -> {
-                        try {
-                            handler.handleMessage(m, ctx, this);
-                        } catch (Throwable t) {
-                            log.error("channelRead: Handling {} failed due to {}:{}",
-                                    m != null ? m.getMsgType() : "UNKNOWN",
-                                    t.getClass().getSimpleName(),
-                                    t.getMessage(),
-                                    t);
-                        }
-                    });
+
+                    if (seqMsgs.contains(m.getMsgType())) {
+                        sequencerWorker.submit(() -> {
+                            try {
+                                handler.handleMessage(m, ctx, this);
+                            } catch (Throwable t) {
+                                log.error("channelRead: Handling {} failed due to {}:{}",
+                                        m != null ? m.getMsgType() : "UNKNOWN",
+                                        t.getClass().getSimpleName(),
+                                        t.getMessage(),
+                                        t);
+                            }
+                        });
+                    } else {
+                        handlerWorkers.submit(() -> {
+                            try {
+                                handler.handleMessage(m, ctx, this);
+                            } catch (Throwable t) {
+                                log.error("channelRead: Handling {} failed due to {}:{}",
+                                        m != null ? m.getMsgType() : "UNKNOWN",
+                                        t.getClass().getSimpleName(),
+                                        t.getMessage(),
+                                        t);
+                            }
+                        });
+                    }
                 }
             }
         } catch (Exception e) {

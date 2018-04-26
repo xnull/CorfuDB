@@ -303,7 +303,7 @@ public class SequencerServer extends AbstractServer {
     }
 
     @ServerHandler(type = CorfuMsgType.SEQUENCER_TRIM_REQ)
-    public synchronized void trimCache(CorfuPayloadMsg<Long> msg,
+    public void trimCache(CorfuPayloadMsg<Long> msg,
                                        ChannelHandlerContext ctx, IServerRouter r) {
         log.info("trimCache: Starting cache eviction");
         if (trimMark < msg.getPayload()) {
@@ -326,7 +326,7 @@ public class SequencerServer extends AbstractServer {
      * Service an incoming request to reset the sequencer.
      */
     @ServerHandler(type = CorfuMsgType.BOOTSTRAP_SEQUENCER)
-    public synchronized void resetServer(CorfuPayloadMsg<SequencerTailsRecoveryMsg> msg,
+    public void resetServer(CorfuPayloadMsg<SequencerTailsRecoveryMsg> msg,
                                          ChannelHandlerContext ctx, IServerRouter r) {
         long initialToken = msg.getPayload().getGlobalTail();
         final Map<UUID, Long> streamTails = msg.getPayload().getStreamTails();
@@ -376,7 +376,7 @@ public class SequencerServer extends AbstractServer {
      * Service an incoming token request.
      */
     @ServerHandler(type = CorfuMsgType.TOKEN_REQ)
-    public synchronized void tokenRequest(CorfuPayloadMsg<TokenRequest> msg,
+    public void tokenRequest(CorfuPayloadMsg<TokenRequest> msg,
                                           ChannelHandlerContext ctx, IServerRouter r) {
         TokenRequest req = msg.getPayload();
 

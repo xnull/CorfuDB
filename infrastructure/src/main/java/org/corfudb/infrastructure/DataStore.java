@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.StampedLock;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -102,6 +103,8 @@ public class DataStore implements IDataStore {
         return hasher.hash().asInt();
     }
 
+    private final StampedLock dataStoreLock = new StampedLock();
+
     /**
      * obtain a {@link LoadingCache}.
      * The cache is backed up by file-per-key uner {@link DataStore::logDir}.
@@ -169,13 +172,27 @@ public class DataStore implements IDataStore {
     }
 
     @Override
-    public synchronized  <T> void put(Class<T> tclass, String prefix, String key, T value) {
-        cache.put(getKey(prefix, key), JsonUtils.parser.toJson(value, tclass));
+    public <T> void put(Class<T> tclass, String prefix, String key, T value) {
+        long stamp = dataStoreLock.writeLock();
+        try {
+            cache.put(getKey(prefix, key), JsonUtils.parser.toJson(value, tclass));
+        } finally {
+            dataStoreLock.unlockWrite(stamp);
+        }
     }
 
     @Override
-    public synchronized  <T> T get(Class<T> tclass, String prefix, String key) {
+    public <T> T get(Class<T> tclass, String prefix, String key) {
+        long stamp = dataStoreLock.tryOptimisticRead();
         String json = cache.get(getKey(prefix, key));
+        if (!dataStoreLock.validate(stamp)) {
+            stamp = dataStoreLock.readLock();
+            try {
+                json = cache.get(getKey(prefix, key));
+            } finally {
+                dataStoreLock.unlockRead(stamp);
+            }
+        }
         return getObject(json, tclass);
     }
 
@@ -192,25 +209,52 @@ public class DataStore implements IDataStore {
      * @return the latest value in the cache
      */
     public <T> T get(Class<T> tclass, String prefix, String key, T value) {
-        String keyString = getKey(prefix, key);
-        String json = cache.get(keyString, k -> JsonUtils.parser.toJson(value, tclass));
+        long stamp = dataStoreLock.tryOptimisticRead();
+        String json = cache.get(getKey(prefix, key), k -> JsonUtils.parser.toJson(value, tclass));
+        if (!dataStoreLock.validate(stamp)) {
+            stamp = dataStoreLock.readLock();
+            try {
+                json = cache.get(getKey(prefix, key), k -> JsonUtils.parser.toJson(value, tclass));
+            } finally {
+                dataStoreLock.unlockRead(stamp);
+            }
+        }
         return getObject(json, tclass);
     }
 
     @Override
-    public synchronized  <T> List<T> getAll(Class<T> tclass, String prefix) {
-        List<T> list = new ArrayList<T>();
+    public <T> List<T> getAll(Class<T> tclass, String prefix) {
+        List<T> list = new ArrayList<>();
+        long stamp = dataStoreLock.tryOptimisticRead();
         for (Map.Entry<String, String> entry : cache.asMap().entrySet()) {
             if (entry.getKey().startsWith(prefix)) {
                 list.add(getObject(entry.getValue(), tclass));
+            }
+        }
+        if (!dataStoreLock.validate(stamp)) {
+            stamp = dataStoreLock.readLock();
+            try {
+                list.clear();
+                for (Map.Entry<String, String> entry : cache.asMap().entrySet()) {
+                    if (entry.getKey().startsWith(prefix)) {
+                        list.add(getObject(entry.getValue(), tclass));
+                    }
+                }
+            } finally {
+                dataStoreLock.unlockRead(stamp);
             }
         }
         return list;
     }
 
     @Override
-    public synchronized <T> void delete(Class<T> tclass, String prefix, String key) {
-        cache.invalidate(getKey(prefix, key));
+    public <T> void delete(Class<T> tclass, String prefix, String key) {
+        long stamp = dataStoreLock.writeLock();
+        try {
+            cache.invalidate(getKey(prefix, key));
+        } finally {
+            dataStoreLock.unlockWrite(stamp);
+        }
     }
 
     // Helper methods

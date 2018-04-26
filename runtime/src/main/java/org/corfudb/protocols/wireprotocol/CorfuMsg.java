@@ -86,7 +86,14 @@ public class CorfuMsg {
         long requestId = buffer.readLong();
         long epoch = buffer.readLong();
         CorfuMsgType message = typeMap.get(buffer.readByte());
-        CorfuMsg msg = message.getConstructor().construct();
+        CorfuMsg msg;
+        if (message.equals(CorfuMsgType.TOKEN_REQ)) {
+            msg = CorfuMsgType.TOKEN_REQ.payloadMsg(CorfuMsgType.TOKEN_REQ.msg());
+        } else if (message.equals(CorfuMsgType.TOKEN_RES)) {
+            msg = CorfuMsgType.TOKEN_RES.payloadMsg(CorfuMsgType.TOKEN_RES.msg());
+        } else {
+            msg = message.getConstructor().construct();
+        }
 
         msg.clientID = clientId;
         msg.requestID = requestId;
