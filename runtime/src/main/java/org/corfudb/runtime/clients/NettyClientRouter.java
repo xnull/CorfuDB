@@ -283,6 +283,7 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
                 ch.pipeline().addLast(new NettyCorfuMessageEncoder());
                 ch.pipeline().addLast(new ClientHandshakeHandler(parameters.getClientId(),
                     node.getNodeId(), parameters.getHandshakeTimeout()));
+                ch.pipeline().addLast(new FilterInboundMsgHandler());
                 ch.pipeline().addLast(NettyClientRouter.this);
             }
         };
