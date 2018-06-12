@@ -396,13 +396,28 @@ public class CheckpointTest extends AbstractObjectTest {
                     // finally, instantiate the map for the snapshot and assert is has the right state
                     try {
                         localm2A.get(0);
-                    } catch (Exception te) {
-                        // this is an expected behavior
-                        assertThat(te).isInstanceOf(TransactionAbortedException.class);
+                    } catch (TransactionAbortedException te) {
+                        // this is an expected behavior!
                         trimExceptionFlag.set(true);
                     }
 
-                    assertThat(trimExceptionFlag).isTrue();
+                    if (trimExceptionFlag.get() == false) {
+                        assertThat(localm2A.size())
+                                .isEqualTo(snapshotPosition);
+
+
+                        // check map positions 0..(snapshot-1)
+                        for (int i = 0; i < snapshotPosition; i++) {
+                            assertThat(localm2A.get(String.valueOf(i)))
+                                    .isEqualTo((long) i);
+                        }
+
+                        // check map positions snapshot..(mapSize-1)
+                        for (int i = snapshotPosition; i < mapSize; i++) {
+                            assertThat(localm2A.get(String.valueOf(i)))
+                                    .isEqualTo(null);
+                        }
+                    }
                 }
         );
 
@@ -553,6 +568,5 @@ public class CheckpointTest extends AbstractObjectTest {
         getRuntime().getObjectsView().TXBegin();
         testMap.put("a", "b");
         getRuntime().getObjectsView().TXEnd();
-
     }
 }

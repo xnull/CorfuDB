@@ -606,7 +606,7 @@ public class VersionLockedObject<T> {
      * @param stream    The stream to sync forward
      * @param timestamp The timestamp to sync up to.
      */
-    protected void  syncStreamUnsafe(ISMRStream stream, long timestamp) {
+    protected void syncStreamUnsafe(ISMRStream stream, long timestamp) {
         log.trace("Sync[{}] {}", this, (timestamp == Address.OPTIMISTIC)
                 ? "Optimistic" : "to " + timestamp);
         long syncTo = (timestamp == Address.OPTIMISTIC) ? Address.MAX : timestamp;
