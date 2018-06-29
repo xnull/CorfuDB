@@ -236,7 +236,12 @@ public class SingleStreamView implements IStreamView {
     public ILogData nextUpTo(long maxGlobal) {
         if (sas.hasNext()) {
             long address = sas.next();
-            if (address > maxGlobal && (sas.getCurrentPointer() > maxGlobal)) {
+            // Note: compare against currentPointer instead of the given address.
+            // The underlying implementation of StreamAddressSpace could be retrieving
+            // intermediate addresses e.g., compositeStreamAddress space
+            // can retrieve a checkpoint address (which summarizes the state of the regular stream
+            // up to a certain address actually given by getCurrentPointer).
+            if (sas.getCurrentPointer() > maxGlobal) {
                 sas.previous();
                 return null;
             }

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.UUID;
 
 import lombok.Getter;
+import lombok.Synchronized;
 import lombok.extern.slf4j.Slf4j;
 
 import org.corfudb.protocols.logprotocol.CheckpointEntry;
@@ -88,6 +89,7 @@ public class CheckpointStreamAddressSpace extends StreamAddressSpace {
     }
 
     @Override
+    @Synchronized
     public void removeAddresses(long upperBound) {
         int removedAddresses = 0;
         int index = this.addresses.indexOf(upperBound);

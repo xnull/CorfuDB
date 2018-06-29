@@ -28,14 +28,12 @@ import org.corfudb.runtime.view.StreamOptions;
  */
 public abstract class StreamAddressSpace implements IStreamAddressSpace {
 
-    protected ArrayList<Long> addresses;
+    protected List<Long> addresses;
     protected AtomicInteger maxInd;
     protected AtomicInteger currInd;
-    // Indicates the limit to which the address space has been resolved
-    // Any address beyond this limit is only a hint, i.e., we need to sync
-    // with the sequencer to be sure other clients have not written to this stream
-    // in addresses in-between.
-    // Hints are allowed as a way to take advantage of local writes.
+    // Limit up to which the address space has been resolved. Any address beyond this limit
+    // is only a hint, i.e., we need to sync with the sequencer to be sure other clients have not
+    // written to this stream in addresses in-between. Hints allow to take advantage of local writes.
     protected AtomicInteger resolvedAddressLimit;
     protected UUID streamId;
     protected CorfuRuntime runtime;
@@ -44,7 +42,7 @@ public abstract class StreamAddressSpace implements IStreamAddressSpace {
     public StreamAddressSpace(UUID id, CorfuRuntime runtime) {
         this.streamId = id;
         this.runtime = runtime;
-        this.addresses = new ArrayList();
+        this.addresses = Collections.synchronizedList(new ArrayList<>());
         this.currInd = new AtomicInteger(-1);
         this.maxInd = new AtomicInteger(-1);
         this.resolvedAddressLimit = new AtomicInteger(-1);
@@ -66,6 +64,15 @@ public abstract class StreamAddressSpace implements IStreamAddressSpace {
         int tmpPtr = addresses.indexOf(address);
 
         if (tmpPtr != -1) {
+            if(resolvedAddressLimit.get() < tmpPtr) {
+                // If address to seek does not fall in the space of resolved addresses, sync to tail
+                Token token = runtime.getSequencerView()
+                        .nextToken(Collections.singleton(streamId), 0).getToken();
+                long currentTail = token.getTokenValue();
+                long lowerBound = (resolvedAddressLimit.get() == -1) ? Address.NON_ADDRESS :
+                        addresses.get(resolvedAddressLimit.get());
+                syncUpTo(currentTail, currentTail, lowerBound);
+            }
             currInd.set(tmpPtr);
             return;
         }
@@ -139,8 +146,6 @@ public abstract class StreamAddressSpace implements IStreamAddressSpace {
     @Synchronized
     public void addAddresses(List<Long> addresses) {
         this.addresses.addAll(addresses);
-        // TODO: we cannot rely on the collections.sort (performance)
-        Collections.sort(this.addresses);
         maxInd.set(this.addresses.size() - 1);
     }
 
@@ -168,6 +173,7 @@ public abstract class StreamAddressSpace implements IStreamAddressSpace {
     }
 
     @Override
+    @Synchronized
     public void removeAddresses(long upperBound) {
         int removedAddresses = 0;
         int index = this.addresses.indexOf(upperBound);
@@ -230,13 +236,17 @@ public abstract class StreamAddressSpace implements IStreamAddressSpace {
                     currInd.getAndAdd(addressesAddedBeforePointer);
                 }
             }
-            // Sort address space (limit to the space of recently resolved addresses), as all addresses before this limit have been ordered...
-//          if (this.addresses.size() != 0 || resolvedAddressLimit.get() != -1) {
-//                int lowerLimit = resolvedAddressLimit.get() != -1 ? resolvedAddressLimit.get() : 0;
-//                Collections.sort(this.addresses.subList(lowerLimit, maxInd.get()));
-//          }
-            // update resolved address to current tail
-            resolvedAddressLimit.set(addresses.indexOf(newTail));
+            // Sort address space (limit to the space of recently resolved addresses),
+            // as all addresses before this limit have been ordered...
+            synchronized (addresses) {
+                if (this.addresses.size() != 0 && (resolvedAddressLimit.get() + 1 != maxInd.get())) {
+                    int lowerLimit = resolvedAddressLimit.get() != -1 ? resolvedAddressLimit.get() + 1 : 0;
+                    // + 1 because sublist toIndex is exclusive
+                    Collections.sort(this.addresses.subList(lowerLimit, maxInd.get() + 1));
+                }
+                // update resolved address to current tail
+                resolvedAddressLimit.set(addresses.indexOf(newTail));
+            }
         }
     }
 

@@ -191,7 +191,6 @@ public class CheckpointTest extends AbstractObjectTest {
                 });
 
         // thread 2: periodic checkpoint of the maps, repeating ITERATIONS_VERY_LOW times
-        // thread 1: perform a periodic checkpoint of the maps, repeating ITERATIONS_VERY_LOW times
         scheduleConcurrently(1, ignored_task_num -> {
             mapCkpoint();
         });
