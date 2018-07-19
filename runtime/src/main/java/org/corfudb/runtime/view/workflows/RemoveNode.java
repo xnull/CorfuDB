@@ -44,8 +44,14 @@ public class RemoveNode extends WorkflowRequest {
     @Override
     protected boolean verifyRequest(@Nonnull Layout layout) {
         // Verify that the new layout doesn't include the removed node
-        return !runtime.getLayoutView().getLayout().getAllServers()
+        boolean res = !runtime.getLayoutView().getLayout().getAllServers()
                 .contains(nodeForWorkflow);
+        if (res) {
+            System.out.println();
+        }
+        return res;
+        //return !runtime.getLayoutView().getLayout().getAllServers()
+          //      .contains(nodeForWorkflow);
     }
 
     @Override

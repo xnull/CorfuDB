@@ -23,7 +23,7 @@ public class Harness {
 
     String localAddress = "localhost";
 
-    private String getAddressForNode(int port) {
+    public static String getAddressForNode(int port) {
         return "localhost:900" + port;
     }
 
@@ -48,7 +48,7 @@ public class Harness {
         return new Layout(layoutServers, sequencer, segments, epoch, clusterId);
     }
 
-    String getClusterConnectionString(int n) {
+    public static String getClusterConnectionString(int n) {
         String conn = "";
         for (int i = 0; i < n; i++) {
             conn += getAddressForNode(i) + ",";
