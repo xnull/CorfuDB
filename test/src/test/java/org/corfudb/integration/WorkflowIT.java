@@ -6,6 +6,7 @@ import org.corfudb.recovery.FastObjectLoader;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.MultiCheckpointWriter;
 import org.corfudb.runtime.collections.CorfuTable;
+import org.corfudb.runtime.view.ClusterStatusReport;
 import org.corfudb.runtime.view.Layout;
 import org.corfudb.runtime.view.LayoutBuilder;
 import org.corfudb.util.Sleep;
@@ -303,6 +304,50 @@ public class WorkflowIT extends AbstractIT {
 
         assertThat(rt.getLayoutView().getLayout().getAllServers().size()).isEqualTo(1);
         assertThat(rt.getLayoutView().getLayout().getAllServers()).containsExactly(n2.getAddress());
+    }
+
+
+    @Test
+    public void clusterStatusTest() throws Exception {
+        // Create a cluster of two nodes and check their status
+        Harness harness = new Harness();
+
+        final int numNodes = 3;
+        List<Node> nodeList = harness.deployCluster(numNodes);
+        Node n0 = nodeList.get(0);
+        Node n1 = nodeList.get(1);
+        Node n2 = nodeList.get(2);
+
+        CorfuRuntime rt = new CorfuRuntime(n1.getClusterAddress()).connect();
+        assertThat(rt.getLayoutView().getLayout().getAllServers().size()).isEqualTo(numNodes);
+
+        // Shutdown two nodes
+        run(n0.shutdown, n2.shutdown);
+
+        //Thread.sleep(10000);
+        for (int x = 0; x < 15; x++) {
+            System.out.println(rt.getManagementView().getClusterStatus().getClientServerConnectivityStatusMap());
+            Thread.sleep(1000);
+
+            if (x == 3) {
+                run(n0.start);
+            }
+
+            if (x == 3) {
+                run(n1.shutdown);
+            }
+
+
+            if (x == 5) {
+                run(n2.shutdown);
+            }
+
+            if (x == 7) {
+                run(n0.shutdown);
+            }
+        }
+
+        //run(n0.start);
     }
 
     /**
