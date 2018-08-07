@@ -25,8 +25,8 @@ import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.clients.TestRule;
 import org.corfudb.runtime.collections.ISMRMap;
 import org.corfudb.runtime.collections.SMRMap;
+import org.corfudb.runtime.exceptions.OutrankedException;
 import org.corfudb.runtime.exceptions.ServerNotReadyException;
-import org.corfudb.runtime.exceptions.UnreachableClusterException;
 import org.corfudb.runtime.exceptions.TransactionAbortedException;
 import org.corfudb.runtime.view.ClusterStatusReport.ClusterStatus;
 import org.corfudb.runtime.view.ClusterStatusReport.NodeStatus;
@@ -1315,6 +1315,14 @@ public class ManagementViewTest extends AbstractViewTest {
 
         Layout layout_1 = getManagementTestLayout();
         // Shut down management servers to prevent auto-reconfiguration.
+        TestRule noSealRule = new TestRule()
+                .matches(m -> m.getMsgType().equals(CorfuMsgType.SET_EPOCH)).drop();
+        addClientRule(getManagementServer(SERVERS.PORT_0).getManagementAgent().getCorfuRuntime(),
+                noSealRule);
+        addClientRule(getManagementServer(SERVERS.PORT_1).getManagementAgent().getCorfuRuntime(),
+                noSealRule);
+        addClientRule(getManagementServer(SERVERS.PORT_2).getManagementAgent().getCorfuRuntime(),
+                noSealRule);
         getManagementServer(SERVERS.PORT_0).shutdown();
         getManagementServer(SERVERS.PORT_1).shutdown();
         getManagementServer(SERVERS.PORT_2).shutdown();
@@ -1411,7 +1419,12 @@ public class ManagementViewTest extends AbstractViewTest {
         // Note that this reconfiguration is not followed by the explicit sequencer bootstrap step.
         layout.setEpoch(layout.getEpoch() + 1);
         corfuRuntime.getLayoutView().getRuntimeLayout(layout).moveServersToEpoch();
-        corfuRuntime.getLayoutView().updateLayout(layout, 1L);
+        try {
+            corfuRuntime.getLayoutView().updateLayout(layout, 1L);
+        } catch (OutrankedException ignored) {
+            corfuRuntime.invalidateLayout();
+            assertThat(corfuRuntime.getLayoutView().getLayout()).isEqualTo(layout);
+        }
 
         // Assert that the primary sequencer is not ready.
         assertThatThrownBy(() -> corfuRuntime.getLayoutView().getRuntimeLayout()
