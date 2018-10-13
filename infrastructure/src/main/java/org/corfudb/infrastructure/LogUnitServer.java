@@ -1,22 +1,15 @@
 package org.corfudb.infrastructure;
 
-import com.codahale.metrics.MetricRegistry;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 import io.netty.channel.ChannelHandlerContext;
 
 import java.lang.invoke.MethodHandles;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 import lombok.Getter;
@@ -24,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import org.corfudb.infrastructure.log.InMemoryStreamLog;
 import org.corfudb.infrastructure.log.StreamLog;
+import org.corfudb.infrastructure.log.StreamLogCompaction;
 import org.corfudb.infrastructure.log.StreamLogFiles;
 import org.corfudb.protocols.wireprotocol.CorfuMsg;
 import org.corfudb.protocols.wireprotocol.CorfuMsgType;
@@ -66,23 +60,16 @@ import org.corfudb.util.Utils;
  */
 @Slf4j
 public class LogUnitServer extends AbstractServer {
-    /**
-     * A scheduler, which is used to schedule periodic tasks like garbage collection.
-     */
-    private final ScheduledExecutorService scheduler =
-            Executors.newScheduledThreadPool(
-                    1,
-                    new ThreadFactoryBuilder()
-                            .setDaemon(true)
-                            .setNameFormat("LogUnit-Maintenance-%d")
-                            .build());
-
-    private ScheduledFuture<?> compactor;
 
     /**
      * The options map.
      */
     private final Map<String, Object> opts;
+
+    /**
+     * The server context of the node.
+     */
+    private final ServerContext serverContext;
 
     /**
      * Handler for this server.
@@ -100,7 +87,7 @@ public class LogUnitServer extends AbstractServer {
     private final long maxCacheSize;
 
     private final StreamLog streamLog;
-
+    private final StreamLogCompaction logCleaner;
     private final BatchWriter<Long, ILogData> batchWriter;
 
     /**
@@ -108,6 +95,7 @@ public class LogUnitServer extends AbstractServer {
      * @param serverContext context object providing settings and objects
      */
     public LogUnitServer(ServerContext serverContext) {
+        this.serverContext = serverContext;
         this.opts = serverContext.getServerConfig();
         double cacheSizeHeapRatio = Double.parseDouble((String) opts.get("--cache-heap-ratio"));
 
@@ -125,9 +113,14 @@ public class LogUnitServer extends AbstractServer {
             streamLog = new StreamLogFiles(serverContext, (Boolean) opts.get("--no-verify"));
         }
 
-        batchWriter = new BatchWriter(streamLog);
 
-        dataCache = Caffeine.<Long, ILogData>newBuilder()
+        batchWriter = new BatchWriter<>(
+                streamLog,
+                serverContext.getLogUnitEpochWaterMark(),
+                !((Boolean) opts.get("--no-sync"))
+        );
+
+        dataCache = Caffeine.newBuilder()
                 .<Long, ILogData>weigher((k, v) -> ((LogData) v).getData() == null ? 1 : (
                         (LogData) v).getData().length)
                 .maximumWeight(maxCacheSize)
@@ -135,11 +128,7 @@ public class LogUnitServer extends AbstractServer {
                 .writer(batchWriter)
                 .build(this::handleRetrieval);
 
-        MetricRegistry metrics = serverContext.getMetrics();
-//        MetricsUtils.addCacheGauges(metrics, metricsPrefix + "cache.", dataCache);
-
-        Runnable task = () -> streamLog.compact();
-        compactor = scheduler.scheduleAtFixedRate(task, 10, 45, TimeUnit.MINUTES);
+        logCleaner = new StreamLogCompaction(streamLog, 10, 45, TimeUnit.MINUTES, ServerContext.SHUTDOWN_TIMER);
     }
 
     /**
@@ -167,11 +156,13 @@ public class LogUnitServer extends AbstractServer {
                 .getPayload().getGlobalAddress(), msg.getPayload().getData().getBackpointerMap());
 
         try {
-            dataCache.put(msg.getPayload().getGlobalAddress(), msg.getPayload().getData());
+            LogData logData = (LogData) msg.getPayload().getData();
+            logData.setEpoch(msg.getEpoch());
+            dataCache.put(msg.getPayload().getGlobalAddress(), logData);
             r.sendResponse(ctx, msg, CorfuMsgType.WRITE_OK.msg());
 
         } catch (OverwriteException ex) {
-            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_OVERWRITE.msg());
+            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_OVERWRITE.payloadMsg(ex.getOverWriteCause().getId()));
         } catch (DataOutrankedException e) {
             r.sendResponse(ctx, msg, CorfuMsgType.ERROR_DATA_OUTRANKED.msg());
         } catch (ValueAdoptedException e) {
@@ -225,11 +216,14 @@ public class LogUnitServer extends AbstractServer {
         IServerRouter r) {
         try {
             long address = msg.getPayload().getAddress();
-            dataCache.put(address, LogData.getHole(address));
+            log.debug("fillHole: filling address {}, epoch {}", address, msg.getEpoch());
+            LogData hole = LogData.getHole(address);
+            hole.setEpoch(msg.getEpoch());
+            dataCache.put(address, hole);
             r.sendResponse(ctx, msg, CorfuMsgType.WRITE_OK.msg());
 
         } catch (OverwriteException e) {
-            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_OVERWRITE.msg());
+            r.sendResponse(ctx, msg, CorfuMsgType.ERROR_OVERWRITE.payloadMsg(e.getOverWriteCause().getId()));
         } catch (DataOutrankedException e) {
             r.sendResponse(ctx, msg, CorfuMsgType.ERROR_DATA_OUTRANKED.msg());
         } catch (ValueAdoptedException e) {
@@ -241,7 +235,7 @@ public class LogUnitServer extends AbstractServer {
 
     @ServerHandler(type = CorfuMsgType.TRIM)
     private void trim(CorfuPayloadMsg<TrimRequest> msg, ChannelHandlerContext ctx, IServerRouter r) {
-        batchWriter.trim(msg.getPayload().getAddress());
+        batchWriter.trim(msg.getPayload().getAddress(), msg.getEpoch());
         //TODO(Maithem): should we return an error if the write fails
         r.sendResponse(ctx, msg, CorfuMsgType.ACK.msg());
     }
@@ -250,7 +244,7 @@ public class LogUnitServer extends AbstractServer {
     private void prefixTrim(CorfuPayloadMsg<TrimRequest> msg, ChannelHandlerContext ctx,
                             IServerRouter r) {
         try {
-            batchWriter.prefixTrim(msg.getPayload().getAddress());
+            batchWriter.prefixTrim(msg.getPayload().getAddress(), msg.getEpoch());
             r.sendResponse(ctx, msg, CorfuMsgType.ACK.msg());
         } catch (TrimmedException ex) {
             r.sendResponse(ctx, msg, CorfuMsgType.ERROR_TRIMMED.msg());
@@ -287,18 +281,35 @@ public class LogUnitServer extends AbstractServer {
     private void rangeWrite(CorfuPayloadMsg<RangeWriteMsg> msg,
                                   ChannelHandlerContext ctx, IServerRouter r) {
         List<LogData> entries = msg.getPayload().getEntries();
-        batchWriter.bulkWrite(entries);
+        batchWriter.bulkWrite(entries, msg.getEpoch());
         r.sendResponse(ctx, msg, CorfuMsgType.WRITE_OK.msg());
     }
 
     /**
-     * Resets the log unit server.
+     * Resets the log unit server via the BatchWriter.
      * Warning: Clears all data.
+     * - The epochWaterMark is persisted to withstand restarts.
+     * - The epochWaterMark is inserted in the queue and then we wait to flush all operations in
+     * the queue before this operation.
+     * - After this the reset operation is inserted which resets and clears all data.
+     * - Finally the cache is invalidated to purge the existing entries.
      */
     @ServerHandler(type = CorfuMsgType.RESET_LOGUNIT)
-    private void resetLogUnit(CorfuMsg msg, ChannelHandlerContext ctx, IServerRouter r) {
-        streamLog.reset();
-        dataCache.invalidateAll();
+    private synchronized void resetLogUnit(CorfuPayloadMsg<Long> msg,
+                                           ChannelHandlerContext ctx, IServerRouter r) {
+        // Check if the reset request is with an epoch greater than the last reset epoch seen.
+        // and should be equal to the current router epoch to prevent stale reset requests from
+        // wiping out the data.
+        if (msg.getPayload() > serverContext.getLogUnitEpochWaterMark()
+                && msg.getPayload() == serverContext.getServerEpoch()) {
+            serverContext.setLogUnitEpochWaterMark(msg.getPayload());
+            batchWriter.waitForEpochWaterMark(msg.getPayload());
+            batchWriter.reset(msg.getPayload());
+            dataCache.invalidateAll();
+            log.info("LogUnit Server Reset.");
+        } else {
+            log.info("LogUnit Server Reset request received but reset already done.");
+        }
         r.sendResponse(ctx, msg, CorfuMsgType.ACK.msg());
     }
 
@@ -330,8 +341,7 @@ public class LogUnitServer extends AbstractServer {
     @Override
     public void shutdown() {
         super.shutdown();
-        compactor.cancel(true);
-        scheduler.shutdownNow();
+        logCleaner.shutdown();
         batchWriter.close();
     }
 

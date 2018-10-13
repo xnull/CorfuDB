@@ -1,6 +1,7 @@
 package org.corfudb.runtime.clients;
 
 import com.codahale.metrics.Timer;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
@@ -15,6 +16,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.Getter;
 import lombok.NonNull;
@@ -24,6 +26,7 @@ import org.corfudb.protocols.wireprotocol.ClientHandshakeHandler;
 import org.corfudb.protocols.wireprotocol.ClientHandshakeHandler.ClientHandshakeEvent;
 import org.corfudb.protocols.wireprotocol.CorfuMsg;
 import org.corfudb.protocols.wireprotocol.CorfuMsgType;
+import org.corfudb.protocols.wireprotocol.InboundMsgFilterHandler;
 import org.corfudb.protocols.wireprotocol.NettyCorfuMessageDecoder;
 import org.corfudb.protocols.wireprotocol.NettyCorfuMessageEncoder;
 import org.corfudb.runtime.CorfuRuntime;
@@ -45,7 +48,6 @@ import javax.annotation.Nonnull;
 import javax.net.ssl.SSLException;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -149,7 +151,7 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
 
 
     private SslContext sslContext;
-    private final Map<CorfuMsgType, String> timerNameCache = new HashMap<>();
+    private final Map<CorfuMsgType, String> timerNameCache;
 
     /**
      * Creates a new NettyClientRouter connected to the specified host and port with the
@@ -166,6 +168,15 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
         this.node = node;
         this.parameters = parameters;
         this.eventLoopGroup = eventLoopGroup;
+
+        // Set timer mapping
+        ImmutableMap.Builder<CorfuMsgType, String> mapBuilder = ImmutableMap.builder();
+        for (CorfuMsgType type : CorfuMsgType.values()) {
+            mapBuilder.put(type,
+                    CorfuComponent.CLIENT_ROUTER.toString() + type.name().toLowerCase());
+        }
+
+        timerNameCache = mapBuilder.build();
 
         timeoutConnect = parameters.getConnectionTimeout().toMillis();
         timeoutResponse = parameters.getRequestTimeout().toMillis();
@@ -266,6 +277,7 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
         return new ChannelInitializer() {
             @Override
             protected void initChannel(@Nonnull Channel ch) throws Exception {
+                ch.pipeline().addLast(new ReadTimeoutHandler(parameters.getIdleConnectionTimeout()));
                 if (parameters.isTlsEnabled()) {
                     ch.pipeline().addLast("ssl", sslContext.newHandler(ch.alloc()));
                 }
@@ -283,6 +295,13 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
                 ch.pipeline().addLast(new NettyCorfuMessageEncoder());
                 ch.pipeline().addLast(new ClientHandshakeHandler(parameters.getClientId(),
                     node.getNodeId(), parameters.getHandshakeTimeout()));
+
+                // If parameters include message filters, add corresponding filter handler
+                if (parameters.getNettyClientInboundMsgFilters() != null) {
+                    final InboundMsgFilterHandler inboundMsgFilterHandler =
+                            new InboundMsgFilterHandler(parameters.getNettyClientInboundMsgFilters());
+                    ch.pipeline().addLast(inboundMsgFilterHandler);
+                }
                 ch.pipeline().addLast(NettyClientRouter.this);
             }
         };
@@ -418,7 +437,9 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
         }
 
         // Set up the timer and context to measure request
-        final Timer roundTripMsgTimer = getTimer(message);
+        final Timer roundTripMsgTimer = CorfuRuntime.getDefaultMetrics()
+                .timer(timerNameCache.get(message.getMsgType()));
+
         final Timer.Context roundTripMsgContext = MetricsUtils
                 .getConditionalContext(isEnabled, roundTripMsgTimer);
 
@@ -453,21 +474,11 @@ public class NettyClientRouter extends SimpleChannelInboundHandler<CorfuMsg>
             CFUtils.within(cfBenchmarked, Duration.ofMillis(timeoutResponse));
         cfTimeout.exceptionally(e -> {
             outstandingRequests.remove(thisRequest);
-            log.debug("Remove request {} due to timeout!", thisRequest);
+            log.debug("Remove request {} to {} due to timeout! Message:{}",
+                    thisRequest, node, message);
             return null;
         });
         return cfTimeout;
-    }
-
-    // Create a timer using appropriate cached timer names
-    private Timer getTimer(@NonNull CorfuMsg message) {
-        if (!timerNameCache.containsKey(message.getMsgType())) {
-            timerNameCache.put(message.getMsgType(),
-                    CorfuComponent.CR.toString() + message.getMsgType().name().toLowerCase());
-        }
-
-        return CorfuRuntime.getDefaultMetrics()
-                .timer(timerNameCache.get(message.getMsgType()));
     }
 
     /**

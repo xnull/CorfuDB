@@ -70,9 +70,12 @@ public class LogUnitClient extends AbstractClient {
     }
 
     private Timer.Context getTimerContext(String opName) {
-        Timer t = getMetricRegistry().timer(
-                CorfuComponent.LUC.toString()
-                        + getHost() + ":" + getPort().toString() + "-" + opName);
+        final String timerName = String.format("%s%s:%s-%s",
+                CorfuComponent.LOG_UNIT_CLIENT.toString(),
+                getHost(),
+                getPort().toString(),
+                opName);
+        Timer t = getMetricRegistry().timer(timerName);
         return t.time();
     }
 
@@ -217,7 +220,7 @@ public class LogUnitClient extends AbstractClient {
     }
 
     /**
-     * Get the starting address of a loggining unit.
+     * Get the starting address of a logging unit.
      * @return A CompletableFuture for the starting address
      */
     public CompletableFuture<Long> getTrimMark() {
@@ -317,7 +320,7 @@ public class LogUnitClient extends AbstractClient {
     /**
      * Send a reset request.
      */
-    public CompletableFuture<Boolean> resetLogUnit() {
-        return sendMessageWithFuture(CorfuMsgType.RESET_LOGUNIT.msg());
+    public CompletableFuture<Boolean> resetLogUnit(long epoch) {
+        return sendMessageWithFuture(CorfuMsgType.RESET_LOGUNIT.payloadMsg(epoch));
     }
 }

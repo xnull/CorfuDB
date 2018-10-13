@@ -1,7 +1,9 @@
 package org.corfudb.integration;
 
+import static junit.framework.TestCase.fail;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.google.common.collect.Range;
 
@@ -27,9 +29,19 @@ import org.corfudb.protocols.wireprotocol.TokenResponse;
 import org.corfudb.runtime.BootstrapUtil;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.CorfuRuntime.CorfuRuntimeParameters;
+import org.corfudb.runtime.clients.BaseHandler;
+import org.corfudb.runtime.clients.IClientRouter;
+import org.corfudb.runtime.clients.LayoutClient;
+import org.corfudb.runtime.clients.LayoutHandler;
+import org.corfudb.runtime.clients.ManagementClient;
+import org.corfudb.runtime.clients.ManagementHandler;
+import org.corfudb.runtime.clients.NettyClientRouter;
 import org.corfudb.runtime.collections.CorfuTable;
+import org.corfudb.runtime.exceptions.AlreadyBootstrappedException;
 import org.corfudb.runtime.exceptions.TransactionAbortedException;
 import org.corfudb.runtime.view.Layout;
+import org.corfudb.runtime.view.stream.IStreamView;
+import org.corfudb.util.CFUtils;
 import org.corfudb.util.NodeLocator;
 import org.corfudb.util.Sleep;
 import org.junit.Before;
@@ -52,7 +64,7 @@ public class ClusterReconfigIT extends AbstractIT {
         return new Random(SEED);
     }
 
-    private Layout get3NodeLayout() throws Exception {
+    private Layout get3NodeLayout() {
         return new Layout(
                 new ArrayList<>(
                         Arrays.asList("localhost:9000", "localhost:9001", "localhost:9002")),
@@ -64,6 +76,21 @@ public class ClusterReconfigIT extends AbstractIT {
                         -1L,
                         Collections.singletonList(new Layout.LayoutStripe(
                                 Arrays.asList("localhost:9000", "localhost:9001", "localhost:9002")
+                        )))),
+                0L,
+                UUID.randomUUID());
+    }
+
+    private Layout get1NodeLayout() {
+        return new Layout(
+                new ArrayList<>(Collections.singletonList("localhost:9000")),
+                new ArrayList<>(Collections.singletonList("localhost:9000")),
+                Collections.singletonList(new Layout.LayoutSegment(
+                        Layout.ReplicationMode.CHAIN_REPLICATION,
+                        0L,
+                        -1L,
+                        Collections.singletonList(new Layout.LayoutStripe(
+                                Collections.singletonList("localhost:9000")
                         )))),
                 0L,
                 UUID.randomUUID());
@@ -253,12 +280,13 @@ public class ClusterReconfigIT extends AbstractIT {
      * @throws Exception
      */
     private Layout incrementClusterEpoch(CorfuRuntime corfuRuntime) throws Exception {
+        long oldEpoch = corfuRuntime.getLayoutView().getLayout().getEpoch();
         Layout l = new Layout(corfuRuntime.getLayoutView().getLayout());
         l.setEpoch(l.getEpoch() + 1);
         corfuRuntime.getLayoutView().getRuntimeLayout(l).moveServersToEpoch();
         corfuRuntime.getLayoutView().updateLayout(l, 1L);
         corfuRuntime.invalidateLayout();
-        assertThat(corfuRuntime.getLayoutView().getLayout().getEpoch()).isEqualTo(1L);
+        assertThat(corfuRuntime.getLayoutView().getLayout().getEpoch()).isEqualTo(oldEpoch + 1);
         return l;
     }
 
@@ -456,6 +484,113 @@ public class ClusterReconfigIT extends AbstractIT {
         shutdownCorfuServer(corfuServer_3);
     }
 
+    private void retryBootstrapOperation(Runnable bootstrapOperation) {
+        final int retries = 5;
+        int retry = retries;
+        while (retry-- > 0) {
+            try {
+                bootstrapOperation.run();
+                return;
+            } catch (Exception e) {
+                Sleep.sleepUninterruptibly(PARAMETERS.TIMEOUT_SHORT);
+            }
+        }
+        fail();
+    }
+
+    /**
+     * Setup a cluster of 1 node. Bootstrap the nodes.
+     * Bootstrap the cluster using the BootstrapUtil. It should assert that the node already
+     * bootstrapped is with the same layout and then bootstrap the cluster.
+     */
+    @Test
+    public void test1NodeBootstrapWithBootstrappedNode() throws Exception {
+
+        // Set up cluster of 1 nodes.
+        final int PORT_0 = 9000;
+        Process corfuServer_1 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_0);
+        final Layout layout = get1NodeLayout();
+        final int retries = 5;
+
+        IClientRouter router = new NettyClientRouter(NodeLocator
+                .parseString(corfuSingleNodeHost + ":" + PORT_0),
+                CorfuRuntime.CorfuRuntimeParameters.builder().build());
+        router.addClient(new LayoutHandler()).addClient(new BaseHandler());
+        retryBootstrapOperation(() -> CFUtils.getUninterruptibly(
+                new LayoutClient(router, layout.getEpoch()).bootstrapLayout(layout)));
+        retryBootstrapOperation(() -> CFUtils.getUninterruptibly(
+                new ManagementClient(router, layout.getEpoch()).bootstrapManagement(layout)));
+
+        BootstrapUtil.bootstrap(layout, retries, PARAMETERS.TIMEOUT_SHORT);
+
+        CorfuRuntime corfuRuntime = createDefaultRuntime();
+        assertThat(corfuRuntime.getLayoutView().getLayout().equals(layout)).isTrue();
+
+        shutdownCorfuServer(corfuServer_1);
+    }
+
+    /**
+     * Setup a cluster of 1 node. Bootstrap the node with a wrong layout.
+     * Bootstrap the cluster using the BootstrapUtil. It should assert that the node already
+     * bootstrapped is with the wrong layout and then fail with the AlreadyBootstrappedException.
+     */
+    @Test
+    public void test1NodeBootstrapWithWrongBootstrappedLayoutServer() throws Exception {
+
+        // Set up cluster of 1 node.
+        final int PORT_0 = 9000;
+        Process corfuServer_1 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_0);
+        final Layout layout = get1NodeLayout();
+        final int retries = 3;
+
+        IClientRouter router = new NettyClientRouter(NodeLocator
+                .parseString(corfuSingleNodeHost + ":" + PORT_0),
+                CorfuRuntime.CorfuRuntimeParameters.builder().build());
+        router.addClient(new LayoutHandler()).addClient(new BaseHandler());
+        Layout wrongLayout = new Layout(layout);
+        wrongLayout.getLayoutServers().add("localhost:9005");
+        retryBootstrapOperation(() -> CFUtils.getUninterruptibly(
+                new LayoutClient(router, layout.getEpoch()).bootstrapLayout(wrongLayout)));
+
+        assertThatThrownBy(() -> BootstrapUtil.bootstrap(layout, retries, PARAMETERS.TIMEOUT_SHORT))
+                .hasCauseInstanceOf(AlreadyBootstrappedException.class);
+
+        shutdownCorfuServer(corfuServer_1);
+    }
+
+    /**
+     * Setup a cluster of 1 node. Bootstrap the node with a wrong layout.
+     * Bootstrap the cluster using the BootstrapUtil. It should assert that the node already
+     * bootstrapped is with the wrong layout and then fail with the AlreadyBootstrappedException.
+     */
+    @Test
+    public void test1NodeBootstrapWithWrongBootstrappedManagementServer() throws Exception {
+
+        // Set up cluster of 1 node.
+        final int PORT_0 = 9000;
+        Process corfuServer_1 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_0);
+        final Layout layout = get1NodeLayout();
+        final int retries = 3;
+
+        IClientRouter router = new NettyClientRouter(NodeLocator
+                .parseString(corfuSingleNodeHost + ":" + PORT_0),
+                CorfuRuntime.CorfuRuntimeParameters.builder().build());
+        router.addClient(new LayoutHandler())
+                .addClient(new ManagementHandler())
+                .addClient(new BaseHandler());
+        Layout wrongLayout = new Layout(layout);
+        final ManagementClient managementClient = new ManagementClient(router, layout.getEpoch());
+        wrongLayout.getLayoutServers().add("localhost:9005");
+        retryBootstrapOperation(() -> CFUtils.getUninterruptibly(
+                managementClient.bootstrapManagement(wrongLayout)));
+
+        assertThatThrownBy(() -> BootstrapUtil.bootstrap(layout, retries, PARAMETERS.TIMEOUT_SHORT))
+                .hasCauseInstanceOf(AlreadyBootstrappedException.class);
+
+        shutdownCorfuServer(corfuServer_1);
+    }
+
+
     /**
      * Starts with 3 nodes on ports 0, 1 and 2.
      * A daemon thread is started for random writes in the background.
@@ -558,12 +693,12 @@ public class ClusterReconfigIT extends AbstractIT {
                 .layoutServer(NodeLocator.parseString("localhost:9000"))
                 .cacheDisabled(true)
                 .systemDownHandlerTriggerLimit(1)
+                // Register the system down handler to throw a RuntimeException.
+                .systemDownHandler(() ->
+                        assertThatCode(semaphore::release).doesNotThrowAnyException())
                 .build();
 
-        CorfuRuntime runtime = CorfuRuntime.fromParameters(corfuRuntimeParameters)
-                .registerSystemDownHandler(() ->
-                        assertThatCode(semaphore::release).doesNotThrowAnyException())
-                .connect();
+        CorfuRuntime runtime = CorfuRuntime.fromParameters(corfuRuntimeParameters).connect();
 
         CorfuTable table = runtime.getObjectsView()
                 .build()
@@ -598,5 +733,244 @@ public class ClusterReconfigIT extends AbstractIT {
 
         // Wait for the systemDownHandler to be invoked.
         semaphore.tryAcquire(PARAMETERS.TIMEOUT_LONG.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Ensure that multiple resets on the same epoch reset the log unit server only once.
+     * Consider 3 nodes 9000, 9001 and 9002.
+     * Kill node 9002 and recover it so that the heal node workflow is triggered, the node is
+     * reset and added back to the chain.
+     * We then perform a write on addresses 6-10.
+     * Now we attempt to reset the node 9002 again on the same epoch and assert that the write
+     * performed on address 1 is not erased by the new reset.
+     */
+    @Test
+    public void preventMultipleResets() throws Exception {
+        // Set up cluster of 3 nodes.
+        final int PORT_0 = 9000;
+        final int PORT_1 = 9001;
+        final int PORT_2 = 9002;
+        Process corfuServer_1 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_0);
+        Process corfuServer_2 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_1);
+        Process corfuServer_3 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_2);
+        final Layout layout = get3NodeLayout();
+
+        final int retries = 3;
+        BootstrapUtil.bootstrap(layout, retries, PARAMETERS.TIMEOUT_SHORT);
+
+        CorfuRuntime runtime = createDefaultRuntime();
+        UUID streamId = CorfuRuntime.getStreamID("testStream");
+        IStreamView stream = runtime.getStreamsView().get(streamId);
+        int counter = 0;
+
+        // Shutdown server 3.
+        shutdownCorfuServer(corfuServer_3);
+        waitForEpochChange(refreshedEpoch -> refreshedEpoch > layout.getEpoch(), runtime);
+        final Layout layoutAfterFailure = runtime.getLayoutView().getLayout();
+
+        final int appendNum = 5;
+        // Write at address 0-4.
+        for (int i = 0; i < appendNum; i++) {
+            stream.append(Integer.toString(counter++).getBytes());
+        }
+
+        // Restart server 3 and wait for heal node workflow to modify the layout.
+        corfuServer_3 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_2);
+        waitForEpochChange(refreshedEpoch -> refreshedEpoch > layoutAfterFailure.getEpoch(), runtime);
+
+        // Write at address 5-9.
+        final long startAddress = 0L;
+        final long endAddress = 9L;
+        for (int i = 0; i < appendNum; i++) {
+            stream.append(Integer.toString(counter++).getBytes());
+        }
+
+        // Trigger a reset on the node.
+        runtime.getLayoutView().getRuntimeLayout(layoutAfterFailure)
+                .getLogUnitClient("localhost:9002")
+                .resetLogUnit(layoutAfterFailure.getEpoch()).get();
+
+        // Verify data
+        int verificationCounter = 0;
+        for (LogData logData : runtime.getLayoutView().getRuntimeLayout()
+                .getLogUnitClient("localhost:9002")
+                .read(Range.closed(startAddress, endAddress)).get()
+                .getAddresses().values()) {
+            assertThat(logData.getPayload(runtime))
+                    .isEqualTo(Integer.toString(verificationCounter++).getBytes());
+        }
+
+        shutdownCorfuServer(corfuServer_1);
+        shutdownCorfuServer(corfuServer_2);
+        shutdownCorfuServer(corfuServer_3);
+    }
+
+    /**
+     * Test that a node with a stale layout can recover.
+     * Consider a cluster of 3 nodes - 9000, 9001 and 9002.
+     * 9002 is first shutdown. This node is now stuck with the layout at epoch 0.
+     * Now 9000 is restarted, forcing an epoch increment.
+     * Next, 9002 is also restarted. The test then asserts that even though 9002 is lagging
+     * by a few epochs, it recovers and is added back to the chain.
+     */
+    @Test
+    public void healNodesWorkflowTest() throws Exception {
+        // Set up cluster of 3 nodes.
+        final int PORT_0 = 9000;
+        final int PORT_1 = 9001;
+        final int PORT_2 = 9002;
+        Process corfuServer_1 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_0);
+        Process corfuServer_2 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_1);
+        Process corfuServer_3 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_2);
+        final int nodesCount = 3;
+        final Layout layout = get3NodeLayout();
+
+        final int retries = 3;
+        BootstrapUtil.bootstrap(layout, retries, PARAMETERS.TIMEOUT_SHORT);
+
+        CorfuRuntime runtime = createDefaultRuntime();
+        UUID streamId = CorfuRuntime.getStreamID("testStream");
+        IStreamView stream = runtime.getStreamsView().get(streamId);
+
+        shutdownCorfuServer(corfuServer_3);
+        waitForEpochChange(refreshedEpoch -> refreshedEpoch > layout.getEpoch(), runtime);
+        final Layout layoutAfterFailure1 = runtime.getLayoutView().getLayout();
+
+        shutdownCorfuServer(corfuServer_1);
+        corfuServer_1 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_0);
+        waitForEpochChange(refreshedEpoch -> refreshedEpoch > layoutAfterFailure1.getEpoch(), runtime);
+        final Layout layoutAfterHeal1 = runtime.getLayoutView().getLayout();
+        int counter = 0;
+
+        final int appendNum = 3;
+        final long startAddress = 0;
+        // Write at address 0-1-2
+        for (int i = 0; i < appendNum; i++) {
+            stream.append(Integer.toString(counter++).getBytes());
+        }
+
+        corfuServer_3 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_2);
+        waitForEpochChange(refreshedEpoch -> refreshedEpoch > layoutAfterHeal1.getEpoch(), runtime);
+
+        // Write at address 3-4-5
+        for (int i = 0; i < appendNum; i++) {
+            stream.append(Integer.toString(counter++).getBytes());
+        }
+        final long endAddress = 5;
+
+        for (int i = 0; i < PARAMETERS.NUM_ITERATIONS_MODERATE; i++) {
+            Layout finalLayout = runtime.getLayoutView().getLayout();
+            if (finalLayout.getUnresponsiveServers().isEmpty()
+                    && finalLayout.getSegments().size() == 1
+                    && finalLayout.getSegments().get(0).getAllLogServers().size() == nodesCount) {
+                break;
+            }
+            runtime.invalidateLayout();
+            Sleep.sleepUninterruptibly(PARAMETERS.TIMEOUT_VERY_SHORT);
+        }
+
+        assertThat(runtime.getLayoutView().getLayout().getUnresponsiveServers()).isEmpty();
+
+        // Verify data
+        int verificationCounter = 0;
+        for (LogData logData : runtime.getLayoutView().getRuntimeLayout()
+                .getLogUnitClient("localhost:9002")
+                .read(Range.closed(startAddress, endAddress)).get()
+                .getAddresses().values()) {
+            assertThat(logData.getPayload(runtime))
+                    .isEqualTo(Integer.toString(verificationCounter++).getBytes());
+        }
+
+        shutdownCorfuServer(corfuServer_1);
+        shutdownCorfuServer(corfuServer_2);
+        shutdownCorfuServer(corfuServer_3);
+    }
+
+    /**
+     * Test that a disconnected CorfuRuntime using a systemDownHandler reconnects itself once the
+     * cluster is back online. The client disconnection is simulated by taking 2 servers
+     * 9000 and 9002 offline by shutting them down. They are then restarted and the date is
+     * validated.
+     */
+    @Test
+    public void reconnectDisconnectedClient() throws Exception {
+        // Set up cluster of 3 nodes.
+        final int PORT_0 = 9000;
+        final int PORT_1 = 9001;
+        final int PORT_2 = 9002;
+        Process corfuServer_1 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_0);
+        Process corfuServer_2 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_1);
+        Process corfuServer_3 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_2);
+        final Layout layout = get3NodeLayout();
+
+        final int retries = 3;
+        BootstrapUtil.bootstrap(layout, retries, PARAMETERS.TIMEOUT_SHORT);
+
+        final int systemDownHandlerLimit = 10;
+        CorfuRuntime runtime = CorfuRuntime.fromParameters(CorfuRuntimeParameters.builder()
+                .layoutServer(NodeLocator.parseString(DEFAULT_ENDPOINT))
+                .systemDownHandlerTriggerLimit(systemDownHandlerLimit)
+                // Register the system down handler to throw a RuntimeException.
+                .systemDownHandler(() -> {
+                    throw new RuntimeException("SystemDownHandler");
+                })
+                .build()).connect();
+
+        UUID streamId = CorfuRuntime.getStreamID("testStream");
+        IStreamView stream = runtime.getStreamsView().get(streamId);
+
+        final int appendNum = 3;
+        int counter = 0;
+        // Preliminary writes.
+        for (int i = 0; i < appendNum; i++) {
+            stream.append(Integer.toString(counter++).getBytes());
+        }
+
+        // Shutdown the servers 9000 and 9002.
+        shutdownCorfuServer(corfuServer_1);
+        shutdownCorfuServer(corfuServer_3);
+
+        final Semaphore latch = new Semaphore(1);
+        latch.acquire();
+
+        // Invalidate the layout so that there are no cached layouts.
+        runtime.invalidateLayout();
+
+        // Spawn a thread which tries to append to the stream. This should initially get stuck and
+        // trigger the systemDownHandler.
+        // This would start the server and finally wait for the append to complete.
+        Thread t = new Thread(() -> {
+            final int counterValue = 3;
+            while (true) {
+                try {
+                    stream.append(Integer.toString(counterValue).getBytes());
+                    break;
+                } catch (RuntimeException sue) {
+                    // Release latch and try again..
+                    latch.release();
+                }
+            }
+        });
+        t.start();
+
+        assertThat(latch.tryAcquire(PARAMETERS.TIMEOUT_LONG.toMillis(), TimeUnit.MILLISECONDS))
+                .isTrue();
+        // Restart both the servers.
+        corfuServer_1 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_0);
+        corfuServer_3 = runUnbootstrappedPersistentServer(corfuSingleNodeHost, PORT_2);
+
+        t.join(PARAMETERS.TIMEOUT_LONG.toMillis());
+
+        // Verify data
+        final int startAddress = 0;
+        final int endAddress = 3;
+        for (int i = startAddress; i <= endAddress; i++) {
+            assertThat(runtime.getAddressSpaceView().read(i).getPayload(runtime))
+                    .isEqualTo(Integer.toString(i).getBytes());
+        }
+
+        shutdownCorfuServer(corfuServer_1);
+        shutdownCorfuServer(corfuServer_2);
+        shutdownCorfuServer(corfuServer_3);
     }
 }

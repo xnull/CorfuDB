@@ -1,5 +1,7 @@
 package org.corfudb.infrastructure;
 
+import static org.corfudb.util.LambdaUtils.runSansThrow;
+
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
@@ -16,13 +18,15 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -37,6 +41,7 @@ import org.corfudb.protocols.wireprotocol.ServerMetrics;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.exceptions.QuorumUnreachableException;
 import org.corfudb.runtime.exceptions.ServerNotReadyException;
+import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuError;
 import org.corfudb.runtime.view.Layout;
 import org.corfudb.runtime.view.QuorumFuturesFactory;
 import org.corfudb.util.CFUtils;
@@ -83,7 +88,7 @@ public class ManagementAgent {
      * To dispatch initialization tasks for recovery and sequencer bootstrap.
      */
     @Getter
-    private Thread initializationTaskThread;
+    private final Thread initializationTaskThread;
     /**
      * Detection Task Scheduler Service
      * This service schedules the following tasks every policyExecuteInterval (1 sec):
@@ -96,7 +101,7 @@ public class ManagementAgent {
      * To dispatch tasks for failure or healed nodes detection.
      */
     @Getter
-    private ExecutorService detectionTaskWorkers;
+    private final ExecutorService detectionTaskWorkers;
     /**
      * Future for periodic failure and healed nodes detection task.
      */
@@ -110,12 +115,12 @@ public class ManagementAgent {
     private volatile boolean shutdown = false;
 
     /**
-     * Future which is marked completed if:
-     * If Recovery, recovered successfully
-     * Else, after bootstrapping the primary sequencer successfully.
+     * Future which is reset every time a new task to bootstrap the sequencer is launched by the
+     * ManagementAgent. This is to avoid multiple bootstrap requests.
+     * Using AtomicReference here to avoid multiple sequencer recovery tasks being triggered.
      */
-    @Getter
-    private volatile CompletableFuture<Boolean> sequencerBootstrappedFuture;
+    private final AtomicReference<Future<Boolean>> sequencerRecoveryFuture
+            = new AtomicReference<>(CompletableFuture.completedFuture(true));
 
     /**
      * The management agent attempts to bootstrap a NOT_READY sequencer if the
@@ -153,7 +158,6 @@ public class ManagementAgent {
     // Connectivity of any responsive nodes not responding. Updated by FailureDetector.
     private Set<String> unresponsiveNodesPeerView = Collections.emptySet();
 
-
     /**
      * Checks and restores if a layout is present in the local datastore to recover from.
      * Spawns the initialization task which recovers if required, bootstraps sequencer and
@@ -171,13 +175,12 @@ public class ManagementAgent {
         bootstrapEndpoint = (opts.get("--management-server") != null)
                 ? opts.get("--management-server").toString() : null;
 
-        sequencerBootstrappedFuture = new CompletableFuture<>();
-
         localServerMetrics = new ServerMetrics(NodeLocator.parseString(getLocalEndpoint()),
                 new SequencerMetrics(SequencerStatus.UNKNOWN));
 
+        Layout managementLayout = serverContext.copyManagementLayout();
         // If no state was preserved, there is no layout to recover.
-        if (serverContext.getManagementLayout() == null) {
+        if (managementLayout == null) {
             recovered = true;
         }
 
@@ -190,11 +193,10 @@ public class ManagementAgent {
         // (In case of trailing layout server, the management server's persisted layout helps.)
         serverContext.installSingleNodeLayoutIfAbsent();
         serverContext.saveManagementLayout(serverContext.getCurrentLayout());
-        serverContext.saveManagementLayout(serverContext.getManagementLayout());
+        serverContext.saveManagementLayout(managementLayout);
 
         if (!recovered) {
-            log.info("Attempting to recover. Layout before shutdown: {}",
-                    serverContext.getManagementLayout());
+            log.info("Attempting to recover. Layout before shutdown: {}", managementLayout);
         }
 
         this.failureDetector = serverContext.getFailureDetector();
@@ -202,7 +204,7 @@ public class ManagementAgent {
         this.reconfigurationEventHandler = new ReconfigurationEventHandler();
 
         final int managementServiceCount = 1;
-        final int detectionWorkersCount = 2;
+        final int detectionWorkersCount = 3;
 
         this.detectionTasksScheduler = Executors.newScheduledThreadPool(
                 managementServiceCount,
@@ -230,13 +232,40 @@ public class ManagementAgent {
         // Creating the initialization task thread.
         // This thread pool is utilized to dispatch one time recovery and sequencer bootstrap tasks.
         // One these tasks finish successfully, they initiate the detection tasks.
-        this.initializationTaskThread = new Thread(this::initializationTask);
+        this.initializationTaskThread = new Thread(this::initializationTask, "initializationTaskThread");
         this.initializationTaskThread.setUncaughtExceptionHandler(
                 (thread, throwable) -> {
                     log.error("Error in initialization task: {}", throwable);
                     shutdown();
                 });
         this.initializationTaskThread.start();
+    }
+
+    /**
+     * Triggers a new task to bootstrap the sequencer for the specified layout. If there is already
+     * a task in progress, this is a no-op.
+     *
+     * @param layout Layout to use to bootstrap the primary sequencer.
+     * @return Future which completes when the task completes successfully or with a failure.
+     */
+    public Future<Boolean> triggerSequencerBootstrap(@NonNull Layout layout) {
+        return sequencerRecoveryFuture.updateAndGet(sequencerRecovery -> {
+            if (sequencerRecovery.isDone()) {
+                return detectionTaskWorkers.submit(() -> {
+                    log.info("triggerSequencerBootstrap: a bootstrap task is triggered.");
+                    try {
+                        getCorfuRuntime().getLayoutManagementView()
+                                .reconfigureSequencerServers(layout, layout, true);
+                    } catch (Exception e) {
+                        log.error("triggerSequencerBootstrap: Failed with Exception: ", e);
+                    }
+                    return true;
+                });
+            }
+
+            log.info("triggerSequencerBootstrap: a bootstrap task is already in progress.");
+            return sequencerRecovery;
+        });
     }
 
     /**
@@ -248,50 +277,48 @@ public class ManagementAgent {
     private void initializationTask() {
 
         try {
-            while (!shutdown) {
-                if (serverContext.getManagementLayout() == null && bootstrapEndpoint == null) {
-                    log.warn("Management Server waiting to be bootstrapped");
-                    Sleep.MILLISECONDS.sleepRecoverably(policyExecuteInterval);
+            while (!shutdown && serverContext.getManagementLayout() == null
+                    && bootstrapEndpoint == null) {
+                log.warn("Management Server waiting to be bootstrapped");
+                Sleep.MILLISECONDS.sleepRecoverably(policyExecuteInterval);
+            }
+
+            // Recover if flag is false
+            while (!recovered) {
+                recovered = runRecoveryReconfiguration();
+                if (!recovered) {
+                    log.error("detectorTaskScheduler: Recovery failed. Retrying.");
                     continue;
                 }
+                // If recovery succeeds, reconfiguration was successful.
+                // Save the latest management layout.
+                serverContext.saveManagementLayout(getCorfuRuntime().getLayoutView().getLayout());
 
-                // Recover if flag is false
-                while (!recovered) {
-                    recovered = runRecoveryReconfiguration();
-                    if (!recovered) {
-                        log.error("detectorTaskScheduler: Recovery failed. Retrying.");
-                        continue;
-                    }
-                    // If recovery succeeds, reconfiguration was successful.
-                    sequencerBootstrappedFuture.complete(true);
-                    log.info("Recovery completed");
-                }
-                break;
+                log.info("Recovery completed");
             }
 
-            // Sequencer bootstrap required if this is fresh startup (not recovery).
-            if (!sequencerBootstrappedFuture.isDone()) {
-                bootstrapPrimarySequencerServer();
-            }
+            // Trigger sequencer bootstrap if in recovery mode or fresh startup
+            triggerSequencerBootstrap(serverContext.copyManagementLayout());
 
             // Initiating periodic task to poll for failures.
-            try {
-                localMetricsPollingService.scheduleAtFixedRate(
-                        this::updateLocalMetrics,
-                        0,
-                        METRICS_POLL_INTERVAL.toMillis(),
-                        TimeUnit.MILLISECONDS);
+            localMetricsPollingService.scheduleAtFixedRate(
+                    () -> runSansThrow(this::updateLocalMetrics),
+                    0,
+                    METRICS_POLL_INTERVAL.toMillis(),
+                    TimeUnit.MILLISECONDS);
 
-                detectionTasksScheduler.scheduleAtFixedRate(
-                        this::detectorTaskScheduler,
-                        0,
-                        policyExecuteInterval,
-                        TimeUnit.MILLISECONDS);
-            } catch (RejectedExecutionException err) {
-                log.error("Error scheduling failure detection task, {}", err);
-            }
+            detectionTasksScheduler.scheduleAtFixedRate(
+                    () -> runSansThrow(this::detectorTaskScheduler),
+                    0,
+                    policyExecuteInterval,
+                    TimeUnit.MILLISECONDS);
+
         } catch (InterruptedException e) {
+            log.error("initializationTask: InitializationTask interrupted.");
             Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.error("initializationTask: Error in initializationTask.", e);
+            throw new UnrecoverableCorfuError(e);
         }
     }
 
@@ -306,28 +333,6 @@ public class ManagementAgent {
      */
     public CorfuRuntime getCorfuRuntime() {
         return runtimeSingletonResource.get();
-    }
-
-    /**
-     * Bootstraps the primary sequencer on a fresh startup (not recovery).
-     */
-    private void bootstrapPrimarySequencerServer() {
-        try {
-            Layout layout = serverContext.getManagementLayout();
-            boolean bootstrapResult = getCorfuRuntime().getLayoutView().getRuntimeLayout(layout)
-                    .getPrimarySequencerClient()
-                    .bootstrap(0L, Collections.emptyMap(), layout.getEpoch(), false)
-                    .get();
-            sequencerBootstrappedFuture.complete(bootstrapResult);
-            // If false, the sequencer is already bootstrapped with a higher epoch.
-            if (!bootstrapResult) {
-                log.warn("Sequencer already bootstrapped.");
-            } else {
-                log.info("Bootstrapped sequencer server at epoch:{}", layout.getEpoch());
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("Bootstrapping sequencer failed: ", e);
-        }
     }
 
     /**
@@ -353,7 +358,12 @@ public class ManagementAgent {
      * @return True if recovery was successful. False otherwise.
      */
     private boolean runRecoveryReconfiguration() {
-        Layout layout = new Layout(serverContext.getManagementLayout());
+        Layout layout = serverContext.copyManagementLayout();
+        if (layout == null) {
+            log.error("Management layout is null. Cannot recover.");
+            return false;
+        }
+        Layout localRecoveryLayout = new Layout(layout);
         boolean recoveryReconfigurationResult = reconfigurationEventHandler
                 .recoverCluster(layout, getCorfuRuntime());
         log.info("Recovery reconfiguration attempt result: {}", recoveryReconfigurationResult);
@@ -362,35 +372,21 @@ public class ManagementAgent {
         Layout clusterLayout = getCorfuRuntime().getLayoutView().getLayout();
 
         log.info("Recovery layout epoch:{}, Cluster epoch: {}",
-                serverContext.getManagementLayout().getEpoch(), clusterLayout.getEpoch());
+                localRecoveryLayout.getEpoch(), clusterLayout.getEpoch());
         // The cluster has moved ahead. This node should not force any layout. Let the other
         // members detect that this node has healed and include it in the layout.
-        boolean recoveryResult =
-                clusterLayout.getEpoch() > serverContext.getManagementLayout().getEpoch()
-                        || recoveryReconfigurationResult;
-
-        if (recoveryResult) {
-            sequencerBootstrappedFuture.complete(true);
-        }
-
-        return recoveryResult;
+        return clusterLayout.getEpoch() > localRecoveryLayout.getEpoch()
+                || recoveryReconfigurationResult;
     }
 
     /**
-     * Task to collect local node metrics.
-     * This task collects the following:
-     * Boolean Status of layout, sequencer and logunit servers.
-     * These metrics are then composed into ServerMetrics model and stored locally.
+     * Queries the local Sequencer Server for SequencerMetrics. This returns UNKNOWN if unable
+     * to fetch the status.
+     *
+     * @param layout Current Management layout.
+     * @return Sequencer Metrics.
      */
-    private void updateLocalMetrics() {
-        // Initializing the status of components
-        // No need to poll unless node is bootstrapped.
-        Layout layout = serverContext.getManagementLayout();
-        if (layout == null) {
-            return;
-        }
-
-        // Build and replace existing locally stored nodeMetrics
+    private SequencerMetrics queryLocalSequencerMetrics(Layout layout) {
         SequencerMetrics sequencerMetrics;
         // This is an optimization. If this node is not the primary sequencer for the current
         // layout, there is no reason to request metrics from this sequencer.
@@ -410,9 +406,27 @@ public class ManagementAgent {
         } else {
             sequencerMetrics = new SequencerMetrics(SequencerStatus.UNKNOWN);
         }
+        return sequencerMetrics;
+    }
 
-        localServerMetrics =
-                new ServerMetrics(NodeLocator.parseString(getLocalEndpoint()), sequencerMetrics);
+    /**
+     * Task to collect local node metrics.
+     * This task collects the following:
+     * Boolean Status of layout, sequencer and logunit servers.
+     * These metrics are then composed into ServerMetrics model and stored locally.
+     */
+    private void updateLocalMetrics() {
+
+        // Initializing the status of components
+        // No need to poll unless node is bootstrapped.
+        Layout layout = serverContext.copyManagementLayout();
+        if (layout == null) {
+            return;
+        }
+
+        // Build and replace existing locally stored nodeMetrics
+        localServerMetrics = new ServerMetrics(NodeLocator.parseString(getLocalEndpoint()),
+                queryLocalSequencerMetrics(layout));
     }
 
     /**
@@ -432,7 +446,6 @@ public class ManagementAgent {
         }
 
         runFailureDetectorTask();
-
         runHealingDetectorTask();
     }
 
@@ -493,17 +506,14 @@ public class ManagementAgent {
             healingDetectorFuture = detectionTaskWorkers.submit(() -> {
 
                 CorfuRuntime corfuRuntime = getCorfuRuntime();
-                PollReport pollReport =
-                        healingDetector.poll(serverContext.getManagementLayout(), corfuRuntime);
+                Layout layout = serverContext.copyManagementLayout();
+                PollReport pollReport = healingDetector.poll(layout, corfuRuntime);
 
                 responsiveNodesPeerView = pollReport.getHealingNodes();
 
                 if (!pollReport.getHealingNodes().isEmpty()) {
-
-
                     try {
                         log.info("Attempting to heal nodes in poll report: {}", pollReport);
-                        Layout layout = serverContext.getManagementLayout();
                         corfuRuntime.getLayoutView().getRuntimeLayout(layout)
                                 .getManagementClient(getLocalEndpoint())
                                 .handleHealing(pollReport.getPollEpoch(),
@@ -543,8 +553,8 @@ public class ManagementAgent {
 
                 CorfuRuntime corfuRuntime = getCorfuRuntime();
                 // Execute the failure detection poll round.
-                PollReport pollReport =
-                        failureDetector.poll(serverContext.getManagementLayout(), corfuRuntime);
+                PollReport pollReport = failureDetector.poll(serverContext.copyManagementLayout(),
+                        corfuRuntime);
 
                 unresponsiveNodesPeerView = pollReport.getFailingNodes();
 
@@ -573,12 +583,14 @@ public class ManagementAgent {
     private Set<String> getNewFailures(PollReport pollReport) {
         return Sets.difference(
                 pollReport.getFailingNodes(),
-                new HashSet<>(serverContext.getManagementLayout().getUnresponsiveServers()));
+                new HashSet<>(serverContext.copyManagementLayout().getUnresponsiveServers()));
     }
 
     /**
-     * All Layout servers have been sealed but there is no client to take this forward and fill the
-     * slot by proposing a new layout.
+     * All active Layout servers have been sealed but there is no client to take this forward and
+     * fill the slot by proposing a new layout. This is determined by the outOfPhaseEpochNodes map.
+     * This map contains a map of nodes and their server router epochs iff that server responded
+     * with a WrongEpochException to the heartbeat message.
      * In this case we can pass an empty set to propose the same layout again and fill the layout
      * slot to un-block the data plane operations.
      *
@@ -586,8 +598,14 @@ public class ManagementAgent {
      * @return True if latest layout slot is vacant. Else False.
      */
     private boolean isCurrentLayoutSlotUnFilled(PollReport pollReport) {
+        final Layout layout = serverContext.copyManagementLayout();
+        // Check if all active layout servers are present in the outOfPhaseEpochNodes map.
         boolean result = pollReport.getOutOfPhaseEpochNodes().keySet()
-                .containsAll(serverContext.getManagementLayout().getLayoutServers());
+                .containsAll(layout.getLayoutServers().stream()
+                        // Unresponsive servers are excluded as they do not respond with a
+                        // WrongEpochException.
+                        .filter(s -> !layout.getUnresponsiveServers().contains(s))
+                        .collect(Collectors.toList()));
         if (result) {
             log.info("Current layout slot is empty. Filling slot with current layout.");
         }
@@ -596,7 +614,9 @@ public class ManagementAgent {
 
     private SequencerStatus getPrimarySequencerStatus(Layout layout, PollReport pollReport) {
         String primarySequencer = layout.getSequencers().get(0);
-        NodeView nodeView = pollReport.getNodeViewMap().get(primarySequencer);
+        // Fetches nodeView from map or creates a default NodeView object.
+        NodeView nodeView = pollReport.getNodeViewMap().getOrDefault(primarySequencer,
+                NodeView.getDefaultNodeView(NodeLocator.parseString(primarySequencer)));
         // If we have a stale poll report, we should discard this and continue polling.
         if (layout.getEpoch() > pollReport.getPollEpoch()) {
             log.warn("getPrimarySequencerStatus: Received poll report for epoch {} but currently "
@@ -619,7 +639,7 @@ public class ManagementAgent {
 
             // These conditions are mutually exclusive. If there is a failure to be
             // handled, we don't need to explicitly fix the unfilled layout slot. Else we do.
-            Layout layout = serverContext.getManagementLayout();
+            Layout layout = serverContext.copyManagementLayout();
             if (!failedNodes.isEmpty() || isCurrentLayoutSlotUnFilled(pollReport)) {
 
                 log.info("Detected changes in node responsiveness: Failed:{}, pollReport:{}",
@@ -645,8 +665,9 @@ public class ManagementAgent {
                     if (sequencerNotReadyCounter.getCounter() >= SEQUENCER_NOT_READY_THRESHOLD) {
                         // Launch task to bootstrap the primary sequencer.
                         log.info("Attempting to bootstrap the primary sequencer.");
-                        getCorfuRuntime().getLayoutManagementView()
-                                .reconfigureSequencerServers(layout, layout, true);
+                        // We do not care about the result of the trigger.
+                        // If it fails, we detect this again and retry in the next polling cycle.
+                        triggerSequencerBootstrap(layout);
                     }
                 }
             }
@@ -670,7 +691,7 @@ public class ManagementAgent {
         }
 
         try {
-            Layout layout = serverContext.getManagementLayout();
+            Layout layout = serverContext.copyManagementLayout();
             // Query all layout servers to get quorum Layout.
             Map<String, CompletableFuture<Layout>> layoutCompletableFutureMap = new HashMap<>();
             for (String layoutServer : layout.getLayoutServers()) {
@@ -693,7 +714,7 @@ public class ManagementAgent {
 
             // Update local layout copy.
             serverContext.saveManagementLayout(quorumLayout);
-            layout = serverContext.getManagementLayout();
+            layout = serverContext.copyManagementLayout();
 
             // In case of a partial seal, a set of servers can be sealed with a higher epoch.
             // We should be able to detect this and bring the rest of the servers to this epoch.
@@ -752,7 +773,7 @@ public class ManagementAgent {
             Map<String, CompletableFuture<Layout>> layoutCompletableFutureMap) {
 
         // Patch trailing layout servers with latestLayout.
-        Layout latestLayout = serverContext.getManagementLayout();
+        Layout latestLayout = serverContext.copyManagementLayout();
         layoutCompletableFutureMap.keySet().forEach(layoutServer -> {
             Layout layout = null;
             try {
@@ -760,7 +781,8 @@ public class ManagementAgent {
             } catch (InterruptedException | ExecutionException e) {
                 // Expected wrong epoch exception if layout server fell behind and has stale
                 // layout and server epoch.
-                log.warn("updateTrailingLayoutServers: layout fetch failed: {}", e);
+                log.warn("updateTrailingLayoutServers: layout fetch from {} failed: {}",
+                        layoutServer, e);
             }
 
             // Do nothing if this layout server is updated with the latestLayout.
@@ -800,6 +822,10 @@ public class ManagementAgent {
         try {
             initializationTaskThread.interrupt();
             initializationTaskThread.join(ServerContext.SHUTDOWN_TIMER.toMillis());
+        } catch (InterruptedException ie) {
+            log.error("initializationTask interrupted : {}", ie);
+        }
+        try {
             detectionTasksScheduler.awaitTermination(ServerContext.SHUTDOWN_TIMER.getSeconds(),
                     TimeUnit.SECONDS);
             detectionTaskWorkers.awaitTermination(ServerContext.SHUTDOWN_TIMER.getSeconds(),

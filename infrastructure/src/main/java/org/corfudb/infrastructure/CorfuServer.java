@@ -40,7 +40,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import static org.corfudb.util.NetworkUtils.getAddressFromInterfaceName;
 import static org.fusesource.jansi.Ansi.Color.BLUE;
@@ -75,11 +74,11 @@ public class CorfuServer {
             "Corfu Server, the server for the Corfu Infrastructure.\n"
                     + "\n"
                     + "Usage:\n"
-                    + "\tcorfu_server (-l <path>|-m) [-ns] [-a <address>|-q <interface-name>] "
+                    + "\tcorfu_server (-l <path>|-m) [-nsN] [-a <address>|-q <interface-name>] "
                     + "[-t <token>] [-c <ratio>] [-d <level>] [-p <seconds>] [-M <address>:<port>] "
                     + "[-e [-u <keystore> -f <keystore_password_file>] [-r <truststore> -w "
                     + "<truststore_password_file>] [-b] [-g -o <username_file> -j <password_file>] "
-                    + "[-k <seqcache>] [-T <threads>] [-i <channel-implementation>] [-H <seconds>] "
+                    + "[-k <seqcache>] [-T <threads>] [-B <size>] [-i <channel-implementation>] [-H <seconds>] "
                     + "[-I <cluster-id>] [-x <ciphers>] [-z <tls-protocols>]] [-P <prefix>]"
                     + " [--agent] <port>\n"
                     + "\n"
@@ -130,6 +129,8 @@ public class CorfuServer {
                     + "                                                                          "
                     + " -k <seqcache>, --sequencer-cache-size=<seqcache>                         "
                     + "               The size of the sequencer's cache. [default: 250000].\n    "
+                    + " -B <size> --batch-size=<size>"
+                    + "              The read/write batch size used for data transfer operations [default: 100].\n"
                     + " -p <seconds>, --compact=<seconds>                                        "
                     + "              The rate the log unit should compact entries (find the,\n"
                     + "                                                                          "
@@ -142,6 +143,8 @@ public class CorfuServer {
                     + "              Layout endpoint to seed Management Server\n"
                     + " -n, --no-verify                                                          "
                     + "              Disable checksum computation and verification.\n"
+                    + " -N, --no-sync                                                          "
+                    + "              Disable syncing writes to secondary storage.\n"
                     + " -e, --enable-tls                                                         "
                     + "              Enable TLS.\n"
                     + " -u <keystore>, --keystore=<keystore>                                     "
@@ -180,6 +183,8 @@ public class CorfuServer {
 
     private static volatile Thread corfuServerThread;
     private static volatile Thread shutdownThread;
+
+    private static final int EXIT_ERROR_CODE = 100;
 
     /**
      * Main program entry point.
@@ -284,7 +289,7 @@ public class CorfuServer {
                     port).channel().closeFuture().syncUninterruptibly();
         } catch (Exception e) {
             log.error("CorfuServer: Server exiting due to unrecoverable error: ", e);
-            throw new UnrecoverableCorfuError(e);
+            System.exit(EXIT_ERROR_CODE);
         }
     }
 

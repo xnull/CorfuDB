@@ -1,5 +1,7 @@
 package org.corfudb.runtime.view;
 
+import static org.corfudb.util.LambdaUtils.runSansThrow;
+import static org.corfudb.util.Utils.getMaxGlobalTail;
 import com.codahale.metrics.Gauge;
 import com.codahale.metrics.MetricRegistry;
 import com.github.benmanes.caffeine.cache.CacheLoader;
@@ -7,13 +9,29 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import lombok.extern.slf4j.Slf4j;
+
 import org.corfudb.protocols.wireprotocol.DataType;
 import org.corfudb.protocols.wireprotocol.ILogData;
 import org.corfudb.protocols.wireprotocol.IToken;
 import org.corfudb.protocols.wireprotocol.LogData;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.clients.LogUnitClient;
+import org.corfudb.runtime.exceptions.OverwriteCause;
 import org.corfudb.runtime.exceptions.OverwriteException;
 import org.corfudb.runtime.exceptions.StaleTokenException;
 import org.corfudb.runtime.exceptions.TrimmedException;
@@ -23,15 +41,6 @@ import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuError;
 import org.corfudb.util.CFUtils;
 import org.corfudb.util.CorfuComponent;
 
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-
 
 /**
  * A view of the address space implemented by Corfu.
@@ -40,6 +49,14 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 public class AddressSpaceView extends AbstractView {
+
+    /**
+     * Scheduler for periodically retrieving the latest trim mark and flush cache.
+     */
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
+            new ThreadFactoryBuilder().setDaemon(true)
+                    .setNameFormat("SyncTrimMark")
+                    .build());
 
     /**
      * A cache for read results.
@@ -67,15 +84,32 @@ public class AddressSpaceView extends AbstractView {
     public AddressSpaceView(@Nonnull final CorfuRuntime runtime) {
         super(runtime);
         MetricRegistry metrics = runtime.getMetrics();
-        final String pfx = String.format("%s0x%x.cache.", CorfuComponent.ASV.toString(),
+        final String pfx = String.format("%s0x%x.cache.", CorfuComponent.ADDRESS_SPACE_VIEW.toString(),
                                          this.hashCode());
         metrics.register(pfx + "cache-size", (Gauge<Long>) readCache::estimatedSize);
         metrics.register(pfx + "evictions", (Gauge<Long>) () -> readCache.stats().evictionCount());
         metrics.register(pfx + "hit-rate", (Gauge<Double>) () -> readCache.stats().hitRate());
         metrics.register(pfx + "hits", (Gauge<Long>) () -> readCache.stats().hitCount());
         metrics.register(pfx + "misses", (Gauge<Long>) () -> readCache.stats().missCount());
+
+        scheduler.scheduleWithFixedDelay(() -> runSansThrow(TrimMarkSyncTask::new),
+                runtime.getParameters().getTrimMarkSyncPeriod().toMillis(),
+                runtime.getParameters().getTrimMarkSyncPeriod().toMillis(), TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Shuts down the AddressSpaceView.
+     * Invalidate the whole cache.
+     * Stops periodic task for retrieving the latest trim mark.
+     */
+    public void shutdown() {
+        try {
+            readCache.invalidateAll();
+            scheduler.shutdownNow();
+        } catch (Exception e) {
+            log.error("Failed to shutdown AddressSpaceView.", e);
+        }
+    }
 
     /**
      * Reset all in-memory caches.
@@ -108,7 +142,7 @@ public class AddressSpaceView extends AbstractView {
         }
 
         if (!logData.equals(ld)){
-            throw new OverwriteException();
+            throw new OverwriteException(OverwriteCause.DIFF_DATA);
         }
     }
 
@@ -148,11 +182,21 @@ public class AddressSpaceView extends AbstractView {
                 l.getReplicationMode(token.getTokenValue())
                         .getReplicationProtocol(runtime)
                         .write(e, ld);
-            } catch (OverwriteException | WriteSizeException ex) {
-                // If we have an Overwrite exception, it is already too late for trying
-                // to validate the state of the write, we know that the write didn't complete.
-                // Large writes are also rejected right away.
-                throw ex;
+            } catch (OverwriteException ex) {
+                if (ex.getOverWriteCause() == OverwriteCause.SAME_DATA){
+                    // If we have an overwrite exception with the SAME_DATA cause, it means that the
+                    // server suspects our data has already been written, in this case we need to
+                    // validate the state of the write.
+                    validateStateOfWrittenEntry(token.getTokenValue(), ld);
+                } else {
+                    // If we have an Overwrite exception with a different cause than SAME_DATA
+                    // we do not need to validate the state of the write, as we know we have been
+                    // certainly overwritten either by other data, by a hole or the address was trimmed.
+                    // Large writes are also rejected right away.
+                    throw ex;
+                }
+            } catch (WriteSizeException we) {
+                throw we;
             } catch (RuntimeException re) {
                 validateStateOfWrittenEntry(token.getTokenValue(), ld);
             }
@@ -248,6 +292,14 @@ public class AddressSpaceView extends AbstractView {
     }
 
     /**
+     * Get the last address in the address space
+     */
+    public long getLogTail() {
+        return layoutHelper(
+                e -> getMaxGlobalTail(e.getLayout(), runtime));
+    }
+
+    /**
      * Prefix trim the address space.
      *
      * <p>At the end of a prefix trim, all addresses equal to or
@@ -315,6 +367,27 @@ public class AddressSpaceView extends AbstractView {
     /** Force the client cache to be invalidated. */
     public void invalidateClientCache() {
         readCache.invalidateAll();
+    }
+
+    /**
+     * Invalidate cache entries with keys less than the specific address.
+     *
+     * @param address Keys less than the input log address will be invalidated.
+     */
+    public void invalidateClientCache(long address) {
+        // TODO: Might need to do some statistics to clear up cache when the amount to
+        // invalidate is huge.
+        readCache.asMap().keySet().forEach(k -> {
+            if (k < address) {
+                try {
+                    readCache.invalidate(k);
+                } catch (RuntimeException e) {
+                    log.error("invalidateClientCache: Error while invalidating cache entry with key={}",
+                            k, e);
+                }
+            }
+        });
+        log.info("invalidateClientCache: Keys less than {} are invalidated in cache.", address);
     }
 
     /**
@@ -393,5 +466,37 @@ public class AddressSpaceView extends AbstractView {
     @VisibleForTesting
     LoadingCache<Long, ILogData> getReadCache() {
         return readCache;
+    }
+
+    /**
+     * Running periodically to retrieve the latest trim mark and flush cache.
+     * Also updates the trimMark in the runtime once the time required to trim the resolvedQueue
+     * has elapsed.
+     */
+    class TrimMarkSyncTask implements Runnable {
+
+        @Override
+        public void run() {
+            long latestTrimMark = getTrimMark();
+            final long currentTimestamp = System.currentTimeMillis();
+
+            // Learns the trim mark and updates only if not previously recorded.
+            if (runtime.getTrimSnapshotList().isEmpty()
+                    || runtime.getTrimSnapshotList().getLast().trimMark < latestTrimMark) {
+                runtime.addTrimSnapshot(latestTrimMark, currentTimestamp);
+                log.info("TrimMarkSyncTask: trim mark is updated from {} to {}.",
+                        runtime.getTrimSnapshotList().getLast().trimMark, latestTrimMark);
+
+                invalidateClientCache(latestTrimMark);
+            }
+
+            // Removes the trim snapshot from the list if it has been recorded before
+            // resolvedStreamTrimTimeout duration in the runtime.
+            if (!runtime.getTrimSnapshotList().isEmpty()
+                    && currentTimestamp - runtime.getTrimSnapshotList().getFirst().trimTimestamp
+                    > runtime.getParameters().getResolvedStreamTrimTimeout().toMillis()) {
+                runtime.matureTrimMark = runtime.getTrimSnapshotList().removeFirst().trimMark;
+            }
+        }
     }
 }

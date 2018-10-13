@@ -22,6 +22,7 @@ import org.corfudb.protocols.wireprotocol.ServerMetrics;
 import org.corfudb.protocols.wireprotocol.orchestrator.OrchestratorMsg;
 
 import org.corfudb.runtime.CorfuRuntime;
+import org.corfudb.runtime.exceptions.UnreachableClusterException;
 import org.corfudb.runtime.view.IReconfigurationHandlerPolicy;
 import org.corfudb.runtime.view.Layout;
 import org.corfudb.util.NodeLocator;
@@ -70,6 +71,28 @@ public class ManagementServer extends AbstractServer {
     private Orchestrator orchestrator;
 
     /**
+     * System down handler to break out of live-locks if the runtime cannot reach the cluster for a
+     * certain amount of time. This handler can be invoked at anytime if the Runtime is stuck and
+     * cannot make progress on an RPC call after trying for more than
+     * SYSTEM_DOWN_HANDLER_TRIGGER_LIMIT number of retries.
+     */
+    private final Runnable runtimeSystemDownHandler = () -> {
+        log.warn("ManagementServer: Runtime stalled. Invoking systemDownHandler after {} "
+                + "unsuccessful tries.", SYSTEM_DOWN_HANDLER_TRIGGER_LIMIT);
+        throw new UnreachableClusterException("Runtime stalled. Invoking systemDownHandler after "
+                + SYSTEM_DOWN_HANDLER_TRIGGER_LIMIT + " unsuccessful tries.");
+    };
+
+    /**
+     * The number of tries to be made to execute any RPC request before the runtime gives up and
+     * invokes the systemDownHandler.
+     * This is set to 60  based on the fact that the sleep duration between RPC retries is
+     * defaulted to 1 second in the Runtime parameters. This gives the Runtime a total of 1 minute
+     * to make progress. Else the ongoing task is aborted.
+     */
+    private static final int SYSTEM_DOWN_HANDLER_TRIGGER_LIMIT = 60;
+
+    /**
      * Returns new ManagementServer.
      *
      * @param serverContext context object providing parameters and objects
@@ -99,16 +122,18 @@ public class ManagementServer extends AbstractServer {
     private CorfuRuntime getNewCorfuRuntime() {
         final CorfuRuntime.CorfuRuntimeParameters params =
                 serverContext.getDefaultRuntimeParameters();
+        params.setSystemDownHandlerTriggerLimit(SYSTEM_DOWN_HANDLER_TRIGGER_LIMIT);
         final CorfuRuntime runtime = CorfuRuntime.fromParameters(params);
+        final Layout managementLayout = serverContext.copyManagementLayout();
         // Runtime can be set up either using the layout or the bootstrapEndpoint address.
-        if (serverContext.getManagementLayout() != null) {
-            serverContext.getManagementLayout().getLayoutServers()
-                    .forEach(runtime::addLayoutServer);
+        if (managementLayout != null) {
+            managementLayout.getLayoutServers().forEach(runtime::addLayoutServer);
         } else {
             runtime.addLayoutServer(getBootstrapEndpoint());
         }
         runtime.connect();
         log.info("getCorfuRuntime: Corfu Runtime connected successfully");
+        params.setSystemDownHandler(runtimeSystemDownHandler);
         return runtime;
     }
 
@@ -177,7 +202,7 @@ public class ManagementServer extends AbstractServer {
      * @param r   server router
      */
     @ServerHandler(type = CorfuMsgType.MANAGEMENT_FAILURE_DETECTED)
-    public synchronized void handleFailureDetectedMsg(CorfuPayloadMsg<DetectorMsg> msg,
+    public void handleFailureDetectedMsg(CorfuPayloadMsg<DetectorMsg> msg,
                                                       ChannelHandlerContext ctx, IServerRouter r) {
 
         // This server has not been bootstrapped yet, ignore all requests.
@@ -189,7 +214,7 @@ public class ManagementServer extends AbstractServer {
         log.info("handleFailureDetectedMsg: Received DetectorMsg : {}", msg.getPayload());
 
         DetectorMsg detectorMsg = msg.getPayload();
-        Layout layout = new Layout(serverContext.getManagementLayout());
+        Layout layout = serverContext.copyManagementLayout();
 
         // If this message is stamped with an older epoch which indicates the polling was
         // conducted in an old epoch. This message cannot be considered and is discarded.
@@ -224,7 +249,7 @@ public class ManagementServer extends AbstractServer {
      * @param r   server router
      */
     @ServerHandler(type = CorfuMsgType.MANAGEMENT_HEALING_DETECTED)
-    public synchronized void handleHealingDetectedMsg(CorfuPayloadMsg<DetectorMsg> msg,
+    public void handleHealingDetectedMsg(CorfuPayloadMsg<DetectorMsg> msg,
                                                       ChannelHandlerContext ctx, IServerRouter r) {
 
         // This server has not been bootstrapped yet, ignore all requests.
@@ -236,7 +261,7 @@ public class ManagementServer extends AbstractServer {
         log.info("handleHealingDetectedMsg: Received DetectorMsg : {}", msg.getPayload());
 
         DetectorMsg detectorMsg = msg.getPayload();
-        Layout layout = new Layout(serverContext.getManagementLayout());
+        Layout layout = serverContext.copyManagementLayout();
 
         // If this message is stamped with an older epoch which indicates the polling was
         // conducted in an old epoch. This message cannot be considered and is discarded.
@@ -281,11 +306,33 @@ public class ManagementServer extends AbstractServer {
                 .endpoint(NodeLocator.parseString(getLocalEndpoint()))
                 // Fetch the node's view of the cluster.
                 .networkMetrics(managementAgent.getConnectivityView());
-        if (localServerMetrics != null) {
-            nodeViewBuilder.serverMetrics(getManagementAgent().getLocalServerMetrics());
-        }
+
+        // NodeViewBuilder fetches the localServerMetrics if available else it passes an empty
+        // server metrics object with SequencerMetrics defaulted to Status.UNKNOWN.
+        nodeViewBuilder.serverMetrics(localServerMetrics != null
+                ? getManagementAgent().getLocalServerMetrics()
+                : ServerMetrics.getDefaultServerMetrics(NodeLocator.parseString(getLocalEndpoint())));
+
         r.sendResponse(ctx, msg, CorfuMsgType.HEARTBEAT_RESPONSE
                 .payloadMsg(nodeViewBuilder.build()));
+    }
+
+    /**
+     * Handles the Management layout request.
+     *
+     * @param msg corfu message containing MANAGEMENT_LAYOUT_REQUEST
+     * @param ctx netty ChannelHandlerContext
+     * @param r   server router
+     */
+    @ServerHandler(type = CorfuMsgType.MANAGEMENT_LAYOUT_REQUEST)
+    public void handleLayoutRequest(CorfuMsg msg, ChannelHandlerContext ctx, IServerRouter r) {
+        // This server has not been bootstrapped yet, ignore all requests.
+        if (!checkBootstrap(msg, ctx, r)) {
+            r.sendResponse(ctx, msg, new CorfuMsg(CorfuMsgType.MANAGEMENT_NOBOOTSTRAP_ERROR));
+            return;
+        }
+        r.sendResponse(ctx, msg,
+                CorfuMsgType.LAYOUT_RESPONSE.payloadMsg(serverContext.getManagementLayout()));
     }
 
     /**
