@@ -23,6 +23,7 @@ import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuError;
 import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuInterruptedError;
 import org.corfudb.security.sasl.plaintext.PlainTextSaslNettyServer;
 import org.corfudb.security.tls.SslContextConstructor;
+import org.corfudb.security.tls.SslContextConstructor.SslConfig;
 import org.corfudb.util.GitRepositoryState;
 import org.corfudb.util.Version;
 import org.docopt.Docopt;
@@ -414,12 +415,14 @@ public class CorfuServer {
                     }
 
                     try {
-                        sslContext = SslContextConstructor.constructSslContext(true,
-                                context.getServerConfig(String.class, "--keystore"),
-                                context.getServerConfig(String.class, "--keystore-password-file"),
-                                context.getServerConfig(String.class, "--truststore"),
-                                context.getServerConfig(String.class,
-                                        "--truststore-password-file"));
+                        SslConfig sslConfig = SslConfig.builder()
+                                .keyStore(context.getServerConfig(String.class, "--keystore"))
+                                .ksPasswordFile(context.getServerConfig(String.class, "--keystore-password-file"))
+                                .trustStore(context.getServerConfig(String.class, "--truststore"))
+                                .tsPasswordFile(context.getServerConfig(String.class, "--truststore-password-file"))
+                                .build();
+
+                        sslContext = SslContextConstructor.constructSslContext(true, sslConfig);
                     } catch (SSLException e) {
                         log.error("Could not build the SSL context", e);
                         throw new RuntimeException("Couldn't build the SSL context", e);

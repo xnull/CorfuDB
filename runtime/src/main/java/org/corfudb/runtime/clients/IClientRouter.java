@@ -1,11 +1,18 @@
 package org.corfudb.runtime.clients;
 
 import io.netty.channel.ChannelHandlerContext;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NonNull;
+import org.corfudb.protocols.wireprotocol.CorfuMsg;
+import org.corfudb.security.tls.SslContextConstructor;
+import org.corfudb.util.NodeLocator;
 
-import java.util.NoSuchElementException;
+import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import org.corfudb.protocols.wireprotocol.CorfuMsg;
+import static lombok.Builder.Default;
 
 /**
  * This is an interface in which all client routers must implement.
@@ -27,16 +34,6 @@ public interface IClientRouter {
     IClientRouter addClient(IClient client);
 
     /**
-     * Gets a client that matches a particular type.
-     *
-     * @param clientType The class of the client to match.
-     * @param <T>        The type of the client to match.
-     * @return The first client that matches that type.
-     * @throws NoSuchElementException If there are no clients matching that type.
-     */
-    <T extends IClient> T getClient(Class<T> clientType);
-
-    /**
      * Send a message and get a completable future to be fulfilled by the reply.
      *
      * @param ctx     The channel handler context to send the message under.
@@ -45,8 +42,7 @@ public interface IClientRouter {
      * @return A completable future which will be fulfilled by the reply,
      * or a timeout in the case there is no response.
      */
-    <T> CompletableFuture<T> sendMessageAndGetCompletable(ChannelHandlerContext ctx,
-                                                          CorfuMsg message);
+    <T> CompletableFuture<T> sendMessageAndGetCompletable(ChannelHandlerContext ctx, CorfuMsg message);
 
     /**
      * Send a message using the router channel handler and
@@ -55,7 +51,7 @@ public interface IClientRouter {
      * @param message The message to send.
      * @param <T>     The type of completable to return.
      * @return A completable future which will be fulfilled by the reply,
-     *      or a timeout in the case there is no response.
+     * or a timeout in the case there is no response.
      */
     default <T> CompletableFuture<T> sendMessageAndGetCompletable(CorfuMsg message) {
         return sendMessageAndGetCompletable(null, message);
@@ -106,16 +102,9 @@ public interface IClientRouter {
     void completeExceptionally(long requestID, Throwable cause);
 
     /**
-     * Starts routing requests.
-     */
-    void start();
-
-    /**
      * Stops routing requests.
      */
     void stop();
-
-    void stop(boolean shutdown);
 
     /**
      * The host that this router is routing requests for.
@@ -127,24 +116,46 @@ public interface IClientRouter {
      */
     Integer getPort();
 
-    /**
-     * Set the Connect timeout
-     *
-     * @param timeoutConnect timeout for connection in milliseconds.
-     */
-    void setTimeoutConnect(long timeoutConnect);
+    @Builder
+    @Getter
+    class ClientRouterConfig {
+        /**
+         * {@link Duration} before requests timeout.
+         */
+        @Default
+        @NonNull
+        private final Duration requestTimeout = Duration.ofSeconds(5);
 
-    /**
-     * Set the retry timeout
-     *
-     * @param timeoutRetry timeout to make a retry in milliseconds.
-     */
-    void setTimeoutRetry(long timeoutRetry);
+        /**
+         * This timeout (in seconds) is used to detect servers that
+         * shutdown abruptly without terminating the connection properly.
+         */
+        @Default
+        int idleConnectionTimeout = 30;
+        /**
+         * The period at which the client sends keep-alive messages to the
+         * server (a message is only send there is no write activity on the channel
+         * for the whole period.
+         */
+        @Default
+        int keepAlivePeriod = 10;
+        /**
+         * {@link Duration} before connections timeout.
+         */
+        @Default
+        @NonNull
+        Duration connectionTimeout = Duration.ofMillis(500);
 
-    /**
-     * Set the Response timeout
-     *
-     * @param timeoutResponse Response timeout in milliseconds.
-     */
-    void setTimeoutResponse(long timeoutResponse);
+        @Default
+        private final Optional<SslContextConstructor.SslConfig> sslConfig = Optional.empty();
+
+        /**
+         * The {@link NodeLocator} which represents the remote node this
+         * {@link NettyClientRouter} connects to.
+         */
+        @Getter
+        @NonNull
+        private final NodeLocator node;
+    }
+
 }

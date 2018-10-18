@@ -1,7 +1,5 @@
 package org.corfudb.runtime.clients;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelFuture;
 import lombok.Data;
@@ -27,6 +25,8 @@ import java.nio.file.StandardCopyOption;
 import java.util.Collections;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /**
  * Created by mwei on 3/28/16.
  */
@@ -51,36 +51,36 @@ public class NettyCommTest extends AbstractCorfuTest {
 
     @Test
     public void nettyServerClientPingable() throws Exception {
-        runWithBaseServer(
-            (port) -> {
-                return new NettyServerData(ServerContextBuilder.defaultContext(port));
-            },
-            (port) -> {
-                return new NettyClientRouter("localhost", port);
-            },
-            (r, d) -> {
-                assertThat(getBaseClient(r).pingSync())
-                    .isTrue();
-            });
+        NettyServerDataConstructor nsdc = (port) -> new NettyServerData(ServerContextBuilder.defaultContext(port));
+
+        NettyClientRouterConstructor ncrc = (port) -> new NettyClientRouter(
+                NodeLocator.builder().host("localhost").port(port).build(),
+                CorfuRuntimeParameters.builder().build()
+        );
+
+        NettyCommFunction actionFn = (r, d) -> assertThat(getBaseClient(r).pingSync()).isTrue();
+
+        runWithBaseServer(nsdc, ncrc, actionFn);
     }
 
     @Test
     public void nettyServerClientPingableAfterFailure() throws Exception {
-        runWithBaseServer(
-            (port) -> {
-                return new NettyServerData(ServerContextBuilder.defaultContext(port));
-            },
-            (port) -> {
-                return new NettyClientRouter("localhost", port);
-            },
-            (r, d) -> {
-                assertThat(getBaseClient(r).pingSync())
-                        .isTrue();
-                d.shutdownServer();
-                d.bootstrapServer();
+        NettyServerDataConstructor nsdc = (port) -> new NettyServerData(ServerContextBuilder.defaultContext(port));
 
-                getBaseClient(r).pingSync();
-            });
+        NettyClientRouterConstructor ncrc = (port) -> new NettyClientRouter(
+                NodeLocator.builder().host("localhost").port(port).build(),
+                CorfuRuntimeParameters.builder().build()
+        );
+
+        final NettyCommFunction actionFn = (r, d) -> {
+            assertThat(getBaseClient(r).pingSync()).isTrue();
+            d.shutdownServer();
+            d.bootstrapServer();
+
+            getBaseClient(r).pingSync();
+        };
+
+        runWithBaseServer(nsdc, ncrc, actionFn);
     }
 
     @Test
@@ -500,14 +500,15 @@ public class NettyCommTest extends AbstractCorfuTest {
             d.bootstrapServer();
             ncr = ncrc.createNettyClientRouter(port);
             ncr.addClient(new BaseHandler());
-            ncr.start();
             actionFn.runTest(ncr, d);
         } catch (Exception ex) {
             log.error("Exception ", ex);
             throw ex;
         } finally {
             try {
-                if (ncr != null) {ncr.stop(true);}
+                if (ncr != null) {
+                    ncr.stop();
+                }
             } catch (Exception ex) {
                 log.warn("Error shutting down client...", ex);
             }
@@ -544,7 +545,7 @@ public class NettyCommTest extends AbstractCorfuTest {
             this.serverContext = context;
         }
 
-        void bootstrapServer() throws Exception {
+        void bootstrapServer() {
             NettyServerRouter nsr =
                 new NettyServerRouter(Collections.singletonList(new BaseServer(serverContext)));
             f = CorfuServer.startAndListen(serverContext.getBossGroup(),

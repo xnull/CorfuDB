@@ -2,49 +2,59 @@ package org.corfudb.security.tls;
 
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
+import lombok.Builder;
+import lombok.Builder.Default;
+import lombok.Getter;
+import lombok.NonNull;
+import lombok.ToString;
+import lombok.Value;
+import lombok.extern.slf4j.Slf4j;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLException;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.UnrecoverableKeyException;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLException;
-
-import io.netty.handler.ssl.SslProvider;
-import lombok.NonNull;
-import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public class SslContextConstructor {
+
+    private SslContextConstructor() {
+        //prevent instatiation
+    }
+
     /**
      * Create SslContext object based on a spec of individual configuration strings.
      *
-     * @param isServer Server or client
-     * @param keyStorePath Key store path string
-     * @param ksPasswordFile Key store password file string
-     * @param trustStorePath Trust store path string
-     * @param tsPasswordFile Trust store password file path string
+     * @param isServer  Server or client
+     * @param sslConfig ssl configuration
      * @return SslContext object.
-     * @throws SSLException
-     *          Wrapper exception for any issue reading the key/trust store.
+     * @throws SSLException Wrapper exception for any issue reading the key/trust store.
      */
-    public static SslContext constructSslContext(boolean isServer,
-                                                 @NonNull String keyStorePath,
-                                                 String ksPasswordFile,
-                                                 @NonNull String trustStorePath,
-                                                 String tsPasswordFile) throws SSLException {
-        log.info("Construct ssl context based on the following information:");
-        log.info("Key store file path: {}.", keyStorePath);
-        log.info("Key store password file path: {}.", ksPasswordFile);
-        log.info("Trust store file path: {}.", trustStorePath);
-        log.info("Trust store password file path: {}.", tsPasswordFile);
+    public static SslContext constructSslContext(boolean isServer, SslConfig sslConfig) throws SSLException {
+        log.info("Construct ssl context based on the following information: {}", sslConfig);
 
-        KeyManagerFactory kmf = createKeyManagerFactory(keyStorePath, ksPasswordFile);
-        ReloadableTrustManagerFactory tmf = new ReloadableTrustManagerFactory(trustStorePath, tsPasswordFile);
+        KeyManagerFactory kmf = createKeyManagerFactory(sslConfig.getKeyStore(), sslConfig.getKsPasswordFile());
+        ReloadableTrustManagerFactory tmf = new ReloadableTrustManagerFactory(
+                sslConfig.getTrustStore(),
+                sslConfig.getTsPasswordFile()
+        );
 
         if (isServer) {
-            return SslContextBuilder.forServer(kmf).sslProvider(SslProvider.OPENSSL).trustManager(tmf).build();
+            return SslContextBuilder
+                    .forServer(kmf)
+                    .sslProvider(sslConfig.getProvider())
+                    .trustManager(tmf)
+                    .build();
         } else {
-            return SslContextBuilder.forClient().sslProvider(SslProvider.OPENSSL).keyManager(kmf).trustManager(tmf).build();
+            return SslContextBuilder
+                    .forClient()
+                    .sslProvider(sslConfig.getProvider())
+                    .keyManager(kmf)
+                    .trustManager(tmf)
+                    .build();
         }
     }
 
@@ -72,5 +82,56 @@ public class SslContextConstructor {
             log.error(errorMessage, e);
             throw new SSLException(errorMessage, e);
         }
+    }
+
+    @Builder
+    @Getter
+    @Value
+    @ToString
+    public static class SslConfig {
+        @Default
+        SslProvider provider = SslProvider.OPENSSL;
+        /**
+         * A path to the key store.
+         */
+        @NonNull
+        @Default
+        String keyStore;
+
+        /**
+         * A file containing the password for the key store.
+         */
+        String ksPasswordFile;
+
+        /**
+         * A path to the trust store.
+         */
+        @NonNull
+        String trustStore;
+
+        /**
+         * A path containing the password for the trust store.
+         */
+        String tsPasswordFile;
+    }
+
+    @Builder
+    @Value
+    public static class SaslConfig {
+        /**
+         * True, if SASL plain text authentication is enabled.
+         */
+        @Default
+        boolean saslPlainTextEnabled = false;
+
+        /**
+         * A path containing the username file for SASL.
+         */
+        String usernameFile;
+
+        /**
+         * A path containing the password file for SASL.
+         */
+        String passwordFile;
     }
 }

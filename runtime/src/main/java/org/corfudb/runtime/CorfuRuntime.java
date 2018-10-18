@@ -157,55 +157,7 @@ public class CorfuRuntime {
         @Default int trimRetry = 2;
         // endregion
 
-        //region        Security parameters
-        /** True, if TLS is enabled. */
-        @Default boolean tlsEnabled = false;
-
-        /** A path to the key store. */
-        String keyStore;
-
-        /** A file containing the password for the key store. */
-        String ksPasswordFile;
-
-        /** A path to the trust store. */
-        String trustStore;
-
-        /** A path containing the password for the trust store. */
-        String tsPasswordFile;
-
-        /** True, if SASL plain text authentication is enabled. */
-        @Default boolean saslPlainTextEnabled = false;
-
-        /** A path containing the username file for SASL. */
-        String usernameFile;
-
-        /** A path containing the password file for SASL. */
-        String passwordFile;
-        //endregion
-
         //region Connection parameters
-        /**
-         * {@link Duration} before requests timeout.
-         */
-        @Default Duration requestTimeout = Duration.ofSeconds(5);
-
-        /**
-         * This timeout (in seconds) is used to detect servers that
-         * shutdown abruptly without terminating the connection properly.
-         */
-        @Default int idleConnectionTimeout = 30;
-
-        /**
-         * The period at which the client sends keep-alive messages to the
-         * server (a message is only send there is no write activity on the channel
-         * for the whole period.
-         */
-        @Default int keepAlivePeriod = 10;
-
-        /**
-         * {@link Duration} before connections timeout.
-         */
-        @Default Duration connectionTimeout = Duration.ofMillis(500);
 
         /**
          * {@link Duration} before reconnecting to a disconnected node.
