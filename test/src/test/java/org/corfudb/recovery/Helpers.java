@@ -4,6 +4,7 @@ import org.corfudb.protocols.wireprotocol.DataType;
 import org.corfudb.protocols.wireprotocol.ILogData;
 import org.corfudb.protocols.wireprotocol.IMetadata;
 import org.corfudb.protocols.wireprotocol.LogData;
+import org.corfudb.recovery.FastLoader.FastObjectLoader;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.collections.CorfuTable;
 import org.corfudb.runtime.collections.SMRMap;
@@ -11,6 +12,7 @@ import org.corfudb.runtime.object.CorfuCompileProxy;
 import org.corfudb.runtime.object.ICorfuSMR;
 import org.corfudb.runtime.object.VersionLockedObject;
 import org.corfudb.runtime.view.ObjectsView;
+import org.corfudb.util.NodeLocator;
 
 import java.util.Map;
 import java.util.UUID;
@@ -44,7 +46,6 @@ public class Helpers{
                 ObjectID(CorfuRuntime.getStreamID(streamName), type);
 
         return ((CorfuCompileProxy) ((ICorfuSMR) cr.getObjectsView().
-                getObjectCache().
                 get(mapId)).
                 getCorfuSMRProxy());
     }
@@ -58,7 +59,7 @@ public class Helpers{
         ObjectsView.ObjectID mapId = new ObjectsView.
                 ObjectID(CorfuRuntime.getStreamID(streamName), type);
 
-        assertThat(rt.getObjectsView().getObjectCache().containsKey(mapId)).isFalse();
+        assertThat(rt.getObjectsView().contains(mapId)).isFalse();
     }
 
     static void assertThatMapIsBuilt(CorfuRuntime rt1, CorfuRuntime rt2, String streamName,
@@ -79,23 +80,25 @@ public class Helpers{
     }
 
     static CorfuRuntime createNewRuntimeWithFastLoader(String configurationString) {
-        CorfuRuntime rt = new CorfuRuntime(configurationString).connect();
+        RecoveryFixture.CachedRecoveryFixture fixture = new RecoveryFixture.CachedRecoveryFixture();
+        fixture.getRuntimeParamsBuilder().layoutServer(NodeLocator.parseString(configurationString));
+        fixture.getCustomStreamTypeBuilder().defaultObjectsType(CorfuTable.class);
 
-        FastObjectLoader loader = new FastObjectLoader(rt).setDefaultObjectsType(CorfuTable.class);
-        loader.loadMaps();
+        fixture.getRuntime().connect();
+        fixture.getFastObjectLoader().load(fixture.getRuntime());
 
-        return rt;
+        return fixture.getRuntime();
     }
 
     static Map<UUID, Long> getRecoveryStreamTails(String configurationString) {
-        CorfuRuntime rt = new CorfuRuntime(configurationString)
-                .connect();
+        RecoveryFixture.CachedRecoveryFixture fixture = new RecoveryFixture.CachedRecoveryFixture();
+        fixture.getRuntimeParamsBuilder().layoutServer(NodeLocator.parseString(configurationString));
 
-        FastObjectLoader loader = new FastObjectLoader(rt);
-        loader.setRecoverSequencerMode(true);
-        loader.loadMaps();
-
-        return loader.getStreamTails();
+        return fixture
+                .getFastSequencerLoader()
+                .load()
+                .getStreamTails()
+                .getTails();
     }
 
     static void trim(CorfuRuntime rt, long address) {

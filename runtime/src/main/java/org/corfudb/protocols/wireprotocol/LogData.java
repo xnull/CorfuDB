@@ -2,17 +2,15 @@ package org.corfudb.protocols.wireprotocol;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-
-import java.util.EnumMap;
-import java.util.concurrent.atomic.AtomicReference;
-
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-
 import org.corfudb.protocols.logprotocol.CheckpointEntry;
 import org.corfudb.protocols.logprotocol.LogEntry;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.util.serializer.Serializers;
+
+import java.util.EnumMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Created by mwei on 8/15/16.
@@ -65,8 +63,7 @@ public class LogData implements ICorfuPayload<LogData>, IMetadata, ILogData {
                         this.payload.set(null);
                     } else {
                         ByteBuf copyBuf = Unpooled.wrappedBuffer(data);
-                        final Object actualValue =
-                                Serializers.CORFU.deserialize(copyBuf, runtime);
+                        final Object actualValue = Serializers.CORFU.deserialize(copyBuf, runtime);
                         // TODO: Remove circular dependency on logentry.
                         if (actualValue instanceof LogEntry) {
                             ((LogEntry) actualValue).setEntry(this);
@@ -152,6 +149,16 @@ public class LogData implements ICorfuPayload<LogData>, IMetadata, ILogData {
         this.metadataMap = new EnumMap<>(IMetadata.LogUnitMetadataType.class);
     }
 
+    public LogData(DataType type, CheckpointEntry cp) {
+        this.type = type;
+        this.data = null;
+        this.metadataMap = new EnumMap<>(IMetadata.LogUnitMetadataType.class);
+
+        this.payload.set(cp);
+        cp.setEntry(this);
+        initCheckpoint(cp);
+    }
+
     /**
      * Constructor for generating LogData.
      *
@@ -159,28 +166,29 @@ public class LogData implements ICorfuPayload<LogData>, IMetadata, ILogData {
      * @param object The actual data/value
      */
     public LogData(DataType type, final Object object) {
+        this.type = type;
+        this.metadataMap = new EnumMap<>(IMetadata.LogUnitMetadataType.class);
+
         if (object instanceof ByteBuf) {
-            this.type = type;
             this.data = byteArrayFromBuf((ByteBuf) object);
-            this.metadataMap = new EnumMap<>(IMetadata.LogUnitMetadataType.class);
         } else {
-            this.type = type;
             this.data = null;
             this.payload.set(object);
             if (object instanceof LogEntry) {
                 ((LogEntry) object).setEntry(this);
             }
-            this.metadataMap = new EnumMap<>(IMetadata.LogUnitMetadataType.class);
             if (object instanceof CheckpointEntry) {
-                CheckpointEntry cp = (CheckpointEntry) object;
-                setCheckpointType(cp.getCpType());
-                setCheckpointId(cp.getCheckpointId());
-                setCheckpointedStreamId(cp.getStreamId());
-                setCheckpointedStreamStartLogAddress(
-                        Long.parseLong(cp.getDict()
-                                .get(CheckpointEntry.CheckpointDictKey.START_LOG_ADDRESS)));
+                initCheckpoint((CheckpointEntry) object);
             }
         }
+    }
+
+    private void initCheckpoint(CheckpointEntry cp) {
+        setCheckpointType(cp.getCpType());
+        setCheckpointId(cp.getCheckpointId());
+        setCheckpointedStreamId(cp.getStreamId());
+        long startLogAddress = Long.parseLong(cp.getDict().get(CheckpointEntry.CheckpointDictKey.START_LOG_ADDRESS));
+        setCheckpointedStreamStartLogAddress(startLogAddress);
     }
 
     /**

@@ -1,11 +1,9 @@
 package org.corfudb.integration;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.corfudb.integration.Harness.run;
-
 import lombok.extern.slf4j.Slf4j;
 import org.corfudb.integration.cluster.Harness.Node;
-import org.corfudb.recovery.FastObjectLoader;
+import org.corfudb.recovery.FastLoader.FastSequencerLoader;
+import org.corfudb.recovery.RecoveryFixture.CachedRecoveryFixture;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.MultiCheckpointWriter;
 import org.corfudb.runtime.collections.CorfuTable;
@@ -17,6 +15,9 @@ import org.junit.Test;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.corfudb.integration.Harness.run;
 
 /**
  * This integration test verifies the behaviour of the add node workflow. In particular, a single node
@@ -361,11 +362,13 @@ public class WorkflowIT extends AbstractIT {
                 .isEqualTo(prefixTrimAddress + 1);
         assertThat(rt.getLayoutView().getRuntimeLayout().getLogUnitClient("localhost:9002").getTrimMark().get())
                 .isEqualTo(prefixTrimAddress + 1);
-        FastObjectLoader fastObjectLoader = new FastObjectLoader(rt);
-        fastObjectLoader.setRecoverSequencerMode(true);
-        fastObjectLoader.loadMaps();
-        assertThat(fastObjectLoader.getStreamTails().get(CorfuRuntime.getStreamID(streamName)))
-                .isEqualTo(streamTail);
+
+        CachedRecoveryFixture fixture = new CachedRecoveryFixture();
+        FastSequencerLoader fastSequencerLoader = fixture.getFastSequencerLoader();
+        fastSequencerLoader.load();
+
+        Long actualStream = fastSequencerLoader.getStreamTails().get(CorfuRuntime.getStreamID(streamName));
+        assertThat(actualStream).isEqualTo(streamTail);
 
         // Shutdown two nodes
         run(n1.shutdown, n2.shutdown);

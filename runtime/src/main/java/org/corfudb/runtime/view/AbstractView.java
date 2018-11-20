@@ -75,7 +75,9 @@ public abstract class AbstractView {
      */
     private Layout getLayoutUninterruptibly() {
         try {
-            return runtime.layout.get();
+            return runtime
+                    .layout
+                    .get();
         } catch (InterruptedException ie) {
             throw new UnrecoverableCorfuInterruptedError("Interrupted in layoutHelper", ie);
         } catch (ExecutionException ex) {

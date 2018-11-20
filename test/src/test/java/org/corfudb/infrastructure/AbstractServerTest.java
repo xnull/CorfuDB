@@ -100,7 +100,7 @@ public abstract class AbstractServerTest extends AbstractCorfuTest {
      */
     private IClientRouter getRouterFunction(CorfuRuntime runtime, String endpoint) {
         runtimeRouterMap.putIfAbsent(runtime, new ConcurrentHashMap<>());
-        if (!endpoint.startsWith("test:")) {
+        if (!endpoint.startsWith("tcp://test:")) {
             throw new RuntimeException("Unsupported endpoint in test: " + endpoint);
         }
         return runtimeRouterMap.get(runtime).computeIfAbsent(endpoint,

@@ -116,7 +116,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
         return NodeLocator.builder()
             .host("test")
             .port(SERVERS.PORT_0)
-            .nodeId(getServer(SERVERS.PORT_0).serverContext.getNodeId())
+            //.nodeId(getServer(SERVERS.PORT_0).serverContext.getNodeId())
             .build();
     }
 
@@ -134,7 +134,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
      */
     protected IClientRouter getRouterFunction(CorfuRuntime runtime, String endpoint) {
         runtimeRouterMap.putIfAbsent(runtime, new ConcurrentHashMap<>());
-        if (!endpoint.startsWith("test:") && !endpoint.startsWith(testHostname)) {
+        if (!endpoint.startsWith("tcp://test:") && !endpoint.startsWith(testHostname)) {
             throw new RuntimeException("Unsupported endpoint in test: " + endpoint);
         }
         return runtimeRouterMap.get(runtime).computeIfAbsent(endpoint,
@@ -224,7 +224,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
      * @return          A test server instance.
      */
     public TestServer getServer(int port) {
-        return testServerMap.get("test:" + port);
+        return testServerMap.get("tcp://test:" + port + "/");
     }
 
     /** Get a instance of a logging unit, given a port.
@@ -310,7 +310,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
         return getRuntime().connect();
     }
 
-    static EventLoopGroup NETTY_EVENT_LOOP;
+    public static EventLoopGroup NETTY_EVENT_LOOP;
 
     @BeforeClass
     public static void initEventGroup() {
@@ -429,7 +429,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
      * @return      The endpoint string.
      */
     public String getEndpoint(int port) {
-        return "test:" + port;
+        return "tcp://test:" + port + "/";
     }
 
     /**
@@ -488,7 +488,7 @@ public abstract class AbstractViewTest extends AbstractCorfuTest {
 
         void addToTest(int port, AbstractViewTest test) {
 
-            if (test.testServerMap.putIfAbsent("test:" + port, this) != null) {
+            if (test.testServerMap.putIfAbsent("tcp://test:" + port + "/", this) != null) {
                 throw new RuntimeException("Server already registered at port " + port);
             }
 

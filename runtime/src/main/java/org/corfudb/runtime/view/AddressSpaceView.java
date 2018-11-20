@@ -278,8 +278,7 @@ public class AddressSpaceView extends AbstractView {
      * Get the last address in the address space
      */
     public Token getLogTail() {
-        return layoutHelper(
-                e -> getMaxGlobalTail(e.getLayout(), runtime));
+        return layoutHelper(e -> getMaxGlobalTail(e.getLayout(), runtime));
     }
 
     /**
@@ -406,9 +405,12 @@ public class AddressSpaceView extends AbstractView {
      */
     public @Nonnull
     Map<Long, ILogData> cacheFetch(Set<Long> addresses) {
-        return layoutHelper(e -> e.getLayout().getReplicationMode(addresses.iterator().next())
+        return layoutHelper(e -> e
+                .getLayout()
+                .getReplicationMode(addresses.iterator().next())
                 .getReplicationProtocol(runtime)
-                .readRange(e, addresses));
+                .readRange(e, addresses)
+        );
     }
 
     /**

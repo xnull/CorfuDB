@@ -2,8 +2,21 @@ package org.corfudb.util;
 
 import com.google.common.collect.Range;
 import com.google.common.collect.RangeSet;
-
 import io.netty.buffer.ByteBuf;
+import jdk.internal.org.objectweb.asm.ClassReader;
+import jdk.internal.org.objectweb.asm.tree.AbstractInsnNode;
+import jdk.internal.org.objectweb.asm.tree.ClassNode;
+import jdk.internal.org.objectweb.asm.tree.InsnList;
+import jdk.internal.org.objectweb.asm.tree.MethodNode;
+import jdk.internal.org.objectweb.asm.util.Printer;
+import jdk.internal.org.objectweb.asm.util.Textifier;
+import jdk.internal.org.objectweb.asm.util.TraceMethodVisitor;
+import lombok.extern.slf4j.Slf4j;
+import org.corfudb.protocols.wireprotocol.Token;
+import org.corfudb.runtime.CorfuRuntime;
+import org.corfudb.runtime.view.Address;
+import org.corfudb.runtime.view.Layout;
+import org.corfudb.runtime.view.QuorumFuturesFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -23,28 +36,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-
-import lombok.extern.slf4j.Slf4j;
-
-import org.corfudb.protocols.logprotocol.LogEntry;
-import org.corfudb.protocols.logprotocol.MultiObjectSMREntry;
-import org.corfudb.protocols.wireprotocol.ILogData;
-import org.corfudb.protocols.wireprotocol.Token;
-import org.corfudb.recovery.FastObjectLoader;
-import org.corfudb.recovery.RecoveryUtils;
-import org.corfudb.runtime.CorfuRuntime;
-import org.corfudb.runtime.view.Address;
-import org.corfudb.runtime.view.Layout;
-import org.corfudb.runtime.view.QuorumFuturesFactory;
-
-import jdk.internal.org.objectweb.asm.ClassReader;
-import jdk.internal.org.objectweb.asm.tree.AbstractInsnNode;
-import jdk.internal.org.objectweb.asm.tree.ClassNode;
-import jdk.internal.org.objectweb.asm.tree.InsnList;
-import jdk.internal.org.objectweb.asm.tree.MethodNode;
-import jdk.internal.org.objectweb.asm.util.Printer;
-import jdk.internal.org.objectweb.asm.util.Textifier;
-import jdk.internal.org.objectweb.asm.util.TraceMethodVisitor;
 
 
 /**
@@ -430,39 +421,6 @@ public class Utils {
      */
     public static String toReadableId(UUID id) {
         return Long.toHexString((id.getLeastSignificantBits()) & 0xFFFF);
-    }
-
-    /** Print the anatomy of a LogData
-     *
-     * <p>Print how many streams are contained in the Metadata and
-     * how many entries per stream.
-     *
-     * <p>Pretty useful for understanding how the the db is being used
-     * from the application perspective.
-     *
-     * @param logData Data entry to print
-     */
-    public static void printLogAnatomy(CorfuRuntime runtime, ILogData logData) {
-        FastObjectLoader fastLoader = new FastObjectLoader(runtime);
-        try {
-            LogEntry le = RecoveryUtils.deserializeLogData(runtime, logData);
-            if (le.getType() == LogEntry.LogEntryType.SMR) {
-                log.info("printLogAnatomy: Number of Streams: 1");
-                log.info("printLogAnatomy: Number of Entries: 1");
-                log.info("--------------------------");
-            } else if (le.getType() == LogEntry.LogEntryType.MULTIOBJSMR) {
-                log.info("printLogAnatomy: Number of Streams: {}", logData.getStreams().size());
-                ((MultiObjectSMREntry)le).getEntryMap().forEach((stream, multiSmrEntry) -> {
-                    log.info("printLogAnatomy: Number of Entries: {}",
-                            multiSmrEntry.getSMRUpdates(stream).size());
-                });
-                log.info("--------------------------");
-            }
-
-        } catch (Exception e) {
-            log.warn("printLogAnatomy [logAddress={}] cannot be deserialized ",
-                    logData.getGlobalAddress());
-        }
     }
 
 

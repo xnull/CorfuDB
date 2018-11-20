@@ -1,25 +1,25 @@
 package org.corfudb.runtime.view;
 
-import static org.corfudb.util.Utils.getMaxGlobalTail;
-
-import java.util.Collections;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.locks.ReentrantLock;
-
-import javax.annotation.Nonnull;
-
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
-
-import org.corfudb.recovery.FastObjectLoader;
+import org.corfudb.protocols.wireprotocol.Token;
+import org.corfudb.recovery.FastLoader.FastSequencerLoader;
+import org.corfudb.recovery.stream.StreamTails;
 import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.exceptions.LayoutModificationException;
 import org.corfudb.runtime.exceptions.OutrankedException;
 import org.corfudb.runtime.exceptions.QuorumUnreachableException;
-import org.corfudb.runtime.exceptions.RecoveryException;
 import org.corfudb.util.CFUtils;
+
+import javax.annotation.Nonnull;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.locks.ReentrantLock;
+
+import static org.corfudb.util.Utils.getMaxGlobalTail;
 
 /**
  * A view of the Layout Manager to manage reconfigurations of the Corfu Cluster.
@@ -28,9 +28,11 @@ import org.corfudb.util.CFUtils;
  */
 @Slf4j
 public class LayoutManagementView extends AbstractView {
+    private final FastSequencerLoader sequenceLoader;
 
-    public LayoutManagementView(@NonNull CorfuRuntime runtime) {
+    public LayoutManagementView(@NonNull CorfuRuntime runtime, FastSequencerLoader sequenceLoader) {
         super(runtime);
+        this.sequenceLoader = sequenceLoader;
     }
 
     private volatile long prepareRank = 1L;
@@ -404,24 +406,20 @@ public class LayoutManagementView extends AbstractView {
                     return;
                 }
 
-                long maxTokenRequested = -1L;
+                long maxTokenRequested = Token.UNINITIALIZED.getSequence();
                 Map<UUID, Long> streamTails = Collections.emptyMap();
                 boolean bootstrapWithoutTailsUpdate = true;
 
                 // Reconfigure Primary Sequencer if required
-                if (forceReconfigure
-                        || !originalLayout.getPrimarySequencer()
-                        .equals(newLayout.getPrimarySequencer())) {
-
-                    FastObjectLoader fastObjectLoader = new FastObjectLoader(runtime);
-                    fastObjectLoader.setRecoverSequencerMode(true);
-                    fastObjectLoader.setLoadInCache(false);
+                if (forceReconfigure || !originalLayout.getPrimarySequencer().equals(newLayout.getPrimarySequencer())) {
 
                     // FastSMRLoader sets the logHead based on trim mark.
-                    fastObjectLoader.loadMaps();
-                    maxTokenRequested = fastObjectLoader.getLogTail();
-                    streamTails = fastObjectLoader.getStreamTails();
-                    verifyStreamTailsMap(streamTails);
+                    Token logTail = runtime.getAddressSpaceView().getLogTail();
+                    sequenceLoader.load();
+                    maxTokenRequested = logTail.getSequence();
+                    StreamTails tails = sequenceLoader.getStreamTails();
+                    tails.verifyStreamTails();
+                    streamTails = tails.getTails();
 
                     // Incrementing the maxTokenRequested value for sequencer reset.
                     maxTokenRequested++;
@@ -429,11 +427,13 @@ public class LayoutManagementView extends AbstractView {
                 }
 
                 // Configuring the new sequencer.
-                boolean sequencerBootstrapResult = CFUtils.getUninterruptibly(
-                        runtime.getLayoutView().getRuntimeLayout(newLayout)
-                                .getPrimarySequencerClient()
-                                .bootstrap(maxTokenRequested, streamTails, newLayout.getEpoch(),
-                                        bootstrapWithoutTailsUpdate));
+                CompletableFuture<Boolean> bootstrap = runtime
+                        .getLayoutView()
+                        .getRuntimeLayout(newLayout)
+                        .getPrimarySequencerClient()
+                        .bootstrap(maxTokenRequested, streamTails, newLayout.getEpoch(), bootstrapWithoutTailsUpdate);
+
+                boolean sequencerBootstrapResult = CFUtils.getUninterruptibly(bootstrap);
                 lastKnownSequencerEpoch = newLayout.getEpoch();
                 if (sequencerBootstrapResult) {
                     log.info("reconfigureSequencerServers: Sequencer bootstrap successful.");
@@ -446,20 +446,6 @@ public class LayoutManagementView extends AbstractView {
             }
         } else {
             log.info("reconfigureSequencerServers: Sequencer reconfiguration already in progress.");
-        }
-    }
-
-    /**
-     * Verifies whether there are any invalid streamTails.
-     *
-     * @param streamTails Stream tails map obtained from the fastSMRLoader.
-     */
-    private void verifyStreamTailsMap(Map<UUID, Long> streamTails) {
-        for (Long value : streamTails.values()) {
-            if (value < 0) {
-                log.error("Stream Tails map verification failed. Map = {}", streamTails);
-                throw new RecoveryException("Invalid stream tails found in map.");
-            }
         }
     }
 }

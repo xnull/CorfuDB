@@ -79,7 +79,7 @@ public class ViewsGarbageCollector {
             long endTs = System.currentTimeMillis();
             trimMark = currTrimMark;
             log.info("runRuntimeGC: completed gc in {}ms on {} object(s), new trimMark {}",
-                    endTs - startTs, runtime.getObjectsView().getObjectCache().size(), trimMark);
+                    endTs - startTs, runtime.getObjectsView().size(), trimMark);
         } catch (Exception e) {
             if (e.getCause() instanceof InterruptedException) {
                 Thread.currentThread().interrupt();

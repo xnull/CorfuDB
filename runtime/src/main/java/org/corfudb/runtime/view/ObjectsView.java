@@ -1,17 +1,8 @@
 package org.corfudb.runtime.view;
 
-import com.sun.xml.internal.bind.v2.TODO;
-
-import java.util.Arrays;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-
-import javax.annotation.Nonnull;
-
+import lombok.Builder;
 import lombok.Data;
 import lombok.Getter;
-import lombok.NonNull;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -29,29 +20,33 @@ import org.corfudb.runtime.object.transactions.AbstractTransactionalContext;
 import org.corfudb.runtime.object.transactions.TransactionBuilder;
 import org.corfudb.runtime.object.transactions.TransactionType;
 import org.corfudb.runtime.object.transactions.TransactionalContext;
-import org.corfudb.runtime.view.stream.IStreamView;
-import org.corfudb.util.serializer.Serializers;
+import org.corfudb.util.ClassCastUtil;
+
+import javax.annotation.Nonnull;
+import java.util.Arrays;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
 
 /**
  * A view of the objects inside a Corfu instance.
  * Created by mwei on 1/7/16.
  */
 @Slf4j
-public class ObjectsView extends AbstractView {
+public class ObjectsView extends AbstractView implements ObjectsViewService {
 
     /**
      * The Transaction stream is used to log/write successful transactions from different clients.
      * Transaction data and meta data can be obtained by reading this stream.
      */
-    public static UUID TRANSACTION_STREAM_ID = CorfuRuntime.getStreamID("Transaction_Stream");
+    public static final UUID TRANSACTION_STREAM_ID = CorfuRuntime.getStreamID("Transaction_Stream");
 
     @Getter
     @Setter
     boolean transactionLogging = false;
 
-
-    @Getter
-    Map<ObjectID, Object> objectCache = new ConcurrentHashMap<>();
+    private final ObjectsViewCache cache = ObjectsViewCache.builder().build();
 
     public ObjectsView(@Nonnull final CorfuRuntime runtime) {
         super(runtime);
@@ -184,10 +179,35 @@ public class ObjectsView extends AbstractView {
      *
      */
     public void gc(long trimMark) {
-        for (Object obj : getObjectCache().values()) {
+        for (Object obj : cache.cache.values()) {
             ((CorfuCompileProxy) ((ICorfuSMR) obj).
                     getCorfuSMRProxy()).getUnderlyingObject().gc(trimMark);
         }
+    }
+
+    @Override
+    public void clear() {
+        cache.clear();
+    }
+
+    @Override
+    public <T> boolean contains(ObjectID<T> objectId) {
+        return cache.contains(objectId);
+    }
+
+    @Override
+    public <T> T computeIfAbsent(ObjectID<T> objectId, Function<ObjectID<?>, ?> mappingFunction) {
+        return cache.computeIfAbsent(objectId, mappingFunction);
+    }
+
+    @Override
+    public <T> T get(ObjectID<T> id) {
+        return cache.get(id);
+    }
+
+    @Override
+    public int size() {
+        return cache.size();
     }
 
     @Data
@@ -198,6 +218,36 @@ public class ObjectsView extends AbstractView {
 
         public String toString() {
             return "[" + streamID + ", " + type.getSimpleName() + "]";
+        }
+    }
+
+    @Builder
+    public static class ObjectsViewCache implements ObjectsViewService {
+        private final ConcurrentMap<ObjectID<?>, Object> cache = new ConcurrentHashMap<>();
+
+        @Override
+        public void clear() {
+            cache.clear();
+        }
+
+        @Override
+        public <T> boolean contains(ObjectID<T> objectId) {
+            return cache.containsKey(objectId);
+        }
+
+        @Override
+        public <T> T computeIfAbsent(ObjectID<T> objectId, Function<ObjectID<?>, ?> mappingFunction) {
+            return (T) cache.computeIfAbsent(objectId, mappingFunction);
+        }
+
+        @Override
+        public <T> T get(ObjectID<T> id) {
+            return (T) cache.get(id);
+        }
+
+        @Override
+        public int size() {
+            return cache.size();
         }
     }
 }

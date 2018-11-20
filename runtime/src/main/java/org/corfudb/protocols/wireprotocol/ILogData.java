@@ -79,6 +79,10 @@ public interface ILogData extends IMetadata, Comparable<ILogData> {
         return (LogEntry) getPayload(runtime);
     }
 
+    default <T extends LogEntry> T getLogEntry(CorfuRuntime runtime, Class<T> logEntryType) {
+        return logEntryType.cast(getPayload(runtime));
+    }
+
     /**
      * Return if there is backpointer for a particular stream.
      */

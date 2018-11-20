@@ -90,7 +90,7 @@ public class ServerContextBuilder {
 
         // Set the prefix to the port number
         if (prefix.equals("")) {
-            prefix = "test:" + port;
+            prefix = "tcp://test:" + port + "/";
         }
         builder.put("--Prefix", prefix);
 

@@ -11,6 +11,7 @@ import java.lang.Thread.UncaughtExceptionHandler;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -24,18 +25,25 @@ import java.util.stream.Collectors;
 
 import javax.annotation.Nonnull;
 
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Builder.Default;
 import lombok.Data;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.Setter;
 import lombok.Singular;
+import lombok.ToString;
 import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
 import org.corfudb.comm.ChannelImplementation;
 import org.corfudb.protocols.wireprotocol.MsgHandlingFilter;
 import org.corfudb.protocols.wireprotocol.VersionInfo;
-import org.corfudb.recovery.FastObjectLoader;
+import org.corfudb.recovery.FastLoader;
+import org.corfudb.recovery.FastLoader.FastObjectLoader;
+import org.corfudb.recovery.FastLoader.FastSequencerLoader;
+import org.corfudb.recovery.address.AddressSpaceLoader;
+import org.corfudb.recovery.FastObjectLoaderConfig;
 import org.corfudb.runtime.clients.BaseClient;
 import org.corfudb.runtime.clients.IClientRouter;
 import org.corfudb.runtime.clients.LayoutClient;
@@ -49,6 +57,7 @@ import org.corfudb.runtime.exceptions.ShutdownException;
 import org.corfudb.runtime.exceptions.WrongClusterException;
 import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuError;
 import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuInterruptedError;
+import org.corfudb.runtime.view.Address;
 import org.corfudb.runtime.view.AddressSpaceView;
 import org.corfudb.runtime.view.Layout;
 import org.corfudb.runtime.view.LayoutManagementView;
@@ -446,6 +455,7 @@ public class CorfuRuntime {
     /**
      * A view of the address space in the Corfu server instance.
      */
+    @NonNull
     @Getter(lazy = true)
     private final AddressSpaceView addressSpaceView = new AddressSpaceView(this);
     /**
@@ -462,8 +472,8 @@ public class CorfuRuntime {
     /**
      * A view of the Layout Manager to manage reconfigurations of the Corfu Cluster.
      */
-    @Getter(lazy = true)
-    private final LayoutManagementView layoutManagementView = new LayoutManagementView(this);
+    @Getter
+    private final LayoutManagementView layoutManagementView;
     /**
      * A view of the Management Service.
      */
@@ -481,6 +491,42 @@ public class CorfuRuntime {
      */
     @Getter
     private NodeRouterPool nodeRouterPool;
+
+    /**
+     * Trim Snapshot contains the address at which the log was trimmed and the timestamp at which
+     * the runtime learnt the trim.
+     * FIXME: This would be deprecated with the introduction of the Stream Layer refactoring.
+     */
+    @ToString
+    @AllArgsConstructor
+    public class TrimSnapshot {
+        public final long trimMark;
+        public final long trimTimestamp;
+    }
+
+    /**
+     * A linked list to keep a record of the trim snapshots learnt by the runtime.
+     * These snapshots are cleared when they expire after
+     * {@link CorfuRuntimeParameters#resolvedStreamTrimTimeout}
+     */
+    @Getter
+    private final LinkedList<TrimSnapshot> trimSnapshotList = new LinkedList<>();
+
+    /**
+     * Adds the trim snapshot to the linked list.
+     *
+     * @param trimMark  Address at which the log was trimmed.
+     * @param timestamp Timestamp at which the trim was learnt.
+     */
+    public void addTrimSnapshot(long trimMark, long timestamp) {
+        trimSnapshotList.addLast(new TrimSnapshot(trimMark, timestamp));
+    }
+
+    /**
+     * Trim snapshot which was recorded more than {@link CorfuRuntimeParameters#resolvedStreamTrimTimeout}
+     * duration ago and can now be used the trim the resolvedQueue safely.
+     */
+    public volatile long matureTrimMark = Address.NON_ADDRESS;
 
     /**
      * A completable future containing a layout, when completed.
@@ -602,6 +648,17 @@ public class CorfuRuntime {
     private CorfuRuntime(@Nonnull CorfuRuntimeParameters parameters) {
         // Set the local parameters field
         this.parameters = parameters;
+
+        AddressSpaceLoader addressSpaceLoader = AddressSpaceLoader.builder()
+                .addressSpaceView(getAddressSpaceView())
+                .batchReadSize(parameters.getBulkReadSize())
+                .build();
+
+        FastSequencerLoader sequencerLoader = FastSequencerLoader.builder()
+                .addressSpaceLoader(addressSpaceLoader)
+                .timeout(parameters.getFastLoaderTimeout())
+                .build();
+        layoutManagementView = new LayoutManagementView(this, sequencerLoader);
 
         // Populate the initial set of layout servers
         layoutServers = parameters.getLayoutServers().stream()
@@ -751,6 +808,7 @@ public class CorfuRuntime {
      * @param configurationString The configuration string to parse.
      * @return A CorfuRuntime Configured based on the configuration string.
      */
+    @Deprecated
     public CorfuRuntime parseConfigurationString(String configurationString) {
         // Parse comma sep. list.
         layoutServers = Pattern.compile(",")
@@ -977,10 +1035,23 @@ public class CorfuRuntime {
         checkVersion();
 
         if (parameters.isUseFastLoader()) {
-            FastObjectLoader fastLoader = new FastObjectLoader(this)
-                    .setBatchReadSize(parameters.getBulkReadSize())
-                    .setTimeoutInMinutesForLoading((int) parameters.fastLoaderTimeout.toMinutes());
-            fastLoader.loadMaps();
+            FastObjectLoaderConfig fastLoaderConfig = FastObjectLoaderConfig.builder()
+                    .cacheDisabled(parameters.isCacheDisabled())
+                    .timeout(parameters.getFastLoaderTimeout())
+                    .build();
+
+            AddressSpaceLoader addressSpaceLoader = AddressSpaceLoader.builder()
+                    .addressSpaceView(getAddressSpaceView())
+                    .batchReadSize(parameters.getBulkReadSize())
+                    .build();
+
+            FastObjectLoader fastLoader = FastObjectLoader.builder()
+                    .addressSpaceLoader(addressSpaceLoader)
+                    .objectsView(getObjectsView())
+                    .config(fastLoaderConfig)
+                    .build();
+
+            fastLoader.load(this);
         }
 
         garbageCollector.start();

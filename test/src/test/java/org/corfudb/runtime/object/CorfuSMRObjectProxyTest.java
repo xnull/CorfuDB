@@ -175,7 +175,7 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
                 .isNotZero();
 
         // clear the cache, forcing a new object to be built.
-        getRuntime().getObjectsView().getObjectCache().clear();
+        getRuntime().getObjectsView().clear();
 
         TestClassUsingAnnotation test2 = (TestClassUsingAnnotation)
                 instantiateCorfuObject(TestClassUsingAnnotation.class, "test");
@@ -290,7 +290,6 @@ public class CorfuSMRObjectProxyTest extends AbstractObjectTest {
                 ObjectID(CorfuRuntime.getStreamID("test"), SMRMap.class);
 
         CorfuCompileProxy cp = ((CorfuCompileProxy) ((ICorfuSMR) r.getObjectsView().
-                getObjectCache().
                 get(mapId)).
                 getCorfuSMRProxy());
 
