@@ -6,13 +6,7 @@ import java.lang.invoke.MethodHandles;
 
 import lombok.Getter;
 import lombok.Setter;
-import org.corfudb.protocols.wireprotocol.CorfuMsg;
-import org.corfudb.protocols.wireprotocol.CorfuMsgType;
-import org.corfudb.protocols.wireprotocol.CorfuPayloadMsg;
-import org.corfudb.protocols.wireprotocol.LayoutMsg;
-import org.corfudb.protocols.wireprotocol.LayoutPrepareRequest;
-import org.corfudb.protocols.wireprotocol.LayoutPrepareResponse;
-import org.corfudb.protocols.wireprotocol.LayoutProposeResponse;
+import org.corfudb.protocols.wireprotocol.*;
 import org.corfudb.runtime.exceptions.AlreadyBootstrappedException;
 import org.corfudb.runtime.exceptions.NoBootstrapException;
 import org.corfudb.runtime.exceptions.OutrankedException;
@@ -53,6 +47,12 @@ public class LayoutHandler implements IClient, IHandler<LayoutClient> {
     private static Object handleLayoutPrepareAck(CorfuPayloadMsg<LayoutPrepareRequest> msg,
                                                  ChannelHandlerContext ctx, IClientRouter r) {
         return msg.getPayload();
+    }
+
+    @ClientHandler(type = CorfuMsgType.PROPOSED_LAYOUT_RESPONSE)
+    private static Object handleProposedLayoutResponse(CorfuMsg msg,
+                                                       ChannelHandlerContext ctx, IClientRouter r) {
+        return ((LayoutMsg) msg).getLayout();
     }
 
     @ClientHandler(type = CorfuMsgType.LAYOUT_NOBOOTSTRAP)

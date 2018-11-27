@@ -100,4 +100,10 @@ public class LayoutClient extends AbstractClient {
                 .payloadMsg(new LayoutCommittedRequest(true, layout.getEpoch(), layout)));
     }
 
+    /**
+     * TODO: javadoc
+     */
+    public CompletableFuture<Layout> getProposedLayout() {
+        return sendMessageWithFuture(CorfuMsgType.PROPOSED_LAYOUT_REQUEST.payloadMsg(getEpoch()));
+    }
 }

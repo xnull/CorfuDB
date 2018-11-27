@@ -1,7 +1,6 @@
 package org.corfudb.runtime;
 
 import com.codahale.metrics.MetricRegistry;
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.netty.channel.ChannelOption;
@@ -10,11 +9,11 @@ import io.netty.channel.EventLoopGroup;
 import java.lang.Thread.UncaughtExceptionHandler;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
@@ -45,6 +44,7 @@ import org.corfudb.runtime.clients.ManagementHandler;
 import org.corfudb.runtime.clients.NettyClientRouter;
 import org.corfudb.runtime.clients.SequencerHandler;
 import org.corfudb.runtime.exceptions.NetworkException;
+import org.corfudb.runtime.exceptions.QuorumUnreachableException;
 import org.corfudb.runtime.exceptions.ShutdownException;
 import org.corfudb.runtime.exceptions.WrongClusterException;
 import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuError;
@@ -787,6 +787,7 @@ public class CorfuRuntime {
      * this function does nothing.
      */
     public synchronized void invalidateLayout() {
+        log.debug("Invalidating layout");
         // Is there a pending request to retrieve the layout?
         if (!layout.isDone()) {
             // Don't create a new request for a layout if there is one pending.
@@ -846,80 +847,157 @@ public class CorfuRuntime {
     }
 
     /**
-     * Return a completable future which is guaranteed to contain a layout.
-     * This future will continue retrying until it gets a layout.
-     * If you need this completable future to fail, you should chain it with a timeout.
+     * TODO: javadoc
      *
-     * @param layoutServers Layout servers to fetch the layout from.
-     * @return A completable future containing a layout.
+     * @param layoutServers
+     * @return
      */
     private CompletableFuture<Layout> fetchLayout(List<String> layoutServers) {
+        return fetchQuorumLayout(layoutServers, this::fetchSingleLayout);
+    }
+
+    /**
+     * TODO: javadoc
+     *
+     * @param layoutServers
+     * @param fallbackFetchFunction
+     * @return
+     */
+    @SuppressWarnings("unchecked")
+    private CompletableFuture<Layout> fetchQuorumLayout(
+            List<String> layoutServers,
+            Function<List<String>, Layout> fallbackFetchFunction) {
 
         return CompletableFuture.supplyAsync(() -> {
-
             List<String> layoutServersCopy = new ArrayList<>(layoutServers);
             parameters.getBeforeRpcHandler().run();
-            int systemDownTriggerCounter = 0;
 
-            while (true) {
+            log.debug("Trying to fetch layout from a quorum of servers.");
+            List<CompletableFuture<Layout>> layoutFutures = new ArrayList<>();
+            // Attempt to get a layout from a quorum of layout servers
+            for (String s : layoutServersCopy) {
+                IClientRouter router = getRouter(s);
+                layoutFutures.add(new LayoutClient(router, Layout.INVALID_EPOCH)
+                        .getProposedLayout());
+            }
 
-                Collections.shuffle(layoutServersCopy);
-                // Iterate through the layout servers, attempting to connect to one
-                for (String s : layoutServersCopy) {
-                    log.debug("Trying connection to layout server {}", s);
-                    try {
-                        IClientRouter router = getRouter(s);
-                        // Try to get a layout.
-                        CompletableFuture<Layout> layoutFuture =
-                                new LayoutClient(router, Layout.INVALID_EPOCH).getLayout();
-                        // Wait for layout
-                        Layout l = layoutFuture.get();
+            try {
+                Layout quorumLayout = FetchLayoutUtil.fetchQuorumLayout(layoutFutures
+                        .toArray(new CompletableFuture[0]));
 
-                        // If the layout we got has a smaller epoch than the latestLayout epoch,
-                        // we discard it.
-                        if (latestLayout != null && latestLayout.getEpoch() > l.getEpoch()) {
-                            log.warn("fetchLayout: Received a layout with epoch {} from server "
-                                            + "{}:{} smaller than latestLayout epoch {}, "
-                                            + "discarded.",
-                                    l.getEpoch(), router.getHost(), router.getPort(),
-                                    latestLayout.getEpoch());
-                            continue;
-                        }
+                log.debug("Got a layout from a quorum of servers: {} ", quorumLayout);
 
-                        checkClusterId(l);
-
-                        layout = layoutFuture;
-                        latestLayout = l;
-                        log.debug("Layout server {} responded with layout {}", s, l);
-
-                        // Prune away removed node routers from the nodeRouterPool.
-                        pruneRemovedRouters(l);
-
-                        return l;
-                    } catch (InterruptedException ie) {
-                        throw new UnrecoverableCorfuInterruptedError(
-                                "Interrupted during layout fetch", ie);
-                    } catch (Exception e) {
-                        log.warn("Tried to get layout from {} but failed with exception:", s, e);
-                    }
+                // If the layout we got has a smaller epoch than the latestLayout epoch,
+                // we discard it.
+                if (latestLayout != null && latestLayout.getEpoch() > quorumLayout.getEpoch()) {
+                    log.warn("fetchLayout: Received a quorum layout with epoch {} smaller than"
+                                    + "latestLayout epoch {}, discarded.",
+                            quorumLayout.getEpoch(), latestLayout.getEpoch());
                 }
 
-                log.warn("Couldn't connect to any up-to-date layout servers, retrying in {}, "
-                                + "Retried {} times, systemDownHandlerTriggerLimit = {}",
-                        parameters.connectionRetryRate, systemDownTriggerCounter,
-                        parameters.getSystemDownHandlerTriggerLimit());
+                checkClusterId(quorumLayout);
+                latestLayout = quorumLayout;
 
-                if (++systemDownTriggerCounter >= parameters.getSystemDownHandlerTriggerLimit()) {
-                    log.info("fetchLayout: Invoking the systemDownHandler.");
-                    parameters.getSystemDownHandler().run();
-                }
+                // Prune away removed node routers from the nodeRouterPool.
+                pruneRemovedRouters(quorumLayout);
 
-                Sleep.sleepUninterruptibly(parameters.connectionRetryRate);
-                if (isShutdown) {
-                    return null;
-                }
+                return quorumLayout;
+
+            } catch (QuorumUnreachableException e) {
+                log.error("fetchQuorumLayout: failed to get quorum, " +
+                        "falling back to fetch from single layout server.", e);
+                return fallbackFetchFunction.apply(layoutServers);
             }
         });
+    }
+
+    /**
+     * TODO: javadoc
+     *
+     * @param layoutServers
+     * @return
+     */
+    private Layout fetchSingleLayout(List<String> layoutServers) {
+        parameters.getBeforeRpcHandler().run();
+        int systemDownTriggerCounter = 0;
+
+        while (true) {
+            CompletableFuture<Layout> newerLayoutFuture = new CompletableFuture<>();
+            List<CompletableFuture<Layout>> futures = new ArrayList<>();
+
+            for (String s : layoutServers) {
+                IClientRouter router = getRouter(s);
+                futures.add(new LayoutClient(router, Layout.INVALID_EPOCH)
+                        .getLayout().thenApplyAsync(l -> {
+                            if (latestLayout == null || l.getEpoch() > latestLayout.getEpoch()) {
+                                newerLayoutFuture.complete(l);
+                            }
+                            return l;
+                        }));
+            }
+
+            // Stop waiting for responses from layout servers as soon as some server
+            // responds with a layout that has epoch higher than the latest layout.
+            CompletableFuture<Object> compositeFuture = CompletableFuture.anyOf(newerLayoutFuture,
+                    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])));
+
+            try {
+                compositeFuture.get();
+            } catch (InterruptedException ie) {
+                throw new UnrecoverableCorfuInterruptedError(ie);
+            } catch (ExecutionException e) {
+                // Do nothing.
+            }
+
+            long failedFutureCount = 0;
+            Layout newLayout = null;
+
+            if (newerLayoutFuture.isDone() && !newerLayoutFuture.isCompletedExceptionally()) {
+                newLayout = CFUtils.getUninterruptibly(newerLayoutFuture);
+            } else {
+                for (CompletableFuture<Layout> f : futures) {
+                    if (f.isCompletedExceptionally()) {
+                        failedFutureCount++;
+                    } else if (f.isDone()) {
+                        Layout l = CFUtils.getUninterruptibly(f);
+                        if (newLayout == null || l.getEpoch() >= newLayout.getEpoch()) {
+                            newLayout = l;
+                        }
+                    }
+                }
+            }
+
+            // Got a layout with same or possibly higher epoch, return.
+            if (newLayout != null && failedFutureCount != futures.size()) {
+                checkClusterId(newLayout);
+
+                log.debug("fetchSingleLayout: received a layout: {}", newLayout);
+                latestLayout = newLayout;
+
+                // Prune away removed node routers from the nodeRouterPool.
+                pruneRemovedRouters(newLayout);
+
+                return newLayout;
+            }
+
+            // No layout server responds with a layout, retry.
+            log.warn("fetchSingleLayout: Couldn't connect to any up-to-date layout servers, " +
+                            "retrying in {}, Retried {} times, " +
+                            "systemDownHandlerTriggerLimit = {}",
+                    parameters.connectionRetryRate, systemDownTriggerCounter,
+                    parameters.getSystemDownHandlerTriggerLimit());
+
+            if (++systemDownTriggerCounter >= parameters.getSystemDownHandlerTriggerLimit()) {
+                log.info("fetchSingleLayout: Invoking the systemDownHandler.");
+                parameters.getSystemDownHandler().run();
+            }
+
+            Sleep.sleepUninterruptibly(parameters.connectionRetryRate);
+
+            if (isShutdown) {
+                return null;
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")

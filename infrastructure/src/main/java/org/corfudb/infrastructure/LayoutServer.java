@@ -86,8 +86,6 @@ public class LayoutServer extends AbstractServer {
         }
     }
 
-
-
     boolean checkBootstrap(CorfuMsg msg, ChannelHandlerContext ctx, IServerRouter r) {
         if (getCurrentLayout() == null) {
             log.warn("Received message but not bootstrapped! Message={}", msg);
@@ -346,6 +344,35 @@ public class LayoutServer extends AbstractServer {
             return new Layout(layout);
         } else {
             return null;
+        }
+    }
+
+    /**
+     * TODO: javadoc
+     * @param msg
+     * @param ctx
+     * @param r
+     */
+    @ServerHandler(type = CorfuMsgType.PROPOSED_LAYOUT_REQUEST)
+    public synchronized void handleMessageProposedLayoutRequest(
+            @Nonnull CorfuPayloadMsg<Long> msg,
+            @Nonnull ChannelHandlerContext ctx,
+            @Nonnull IServerRouter r) {
+        if (!checkBootstrap(msg, ctx, r)) {
+            return;
+        }
+
+        long epoch = msg.getPayload();
+        if (epoch <= serverContext.getServerEpoch()) {
+            Layout layout = getProposedLayout();
+            r.sendResponse(ctx, msg, new LayoutMsg(layout != null ? layout : getCurrentLayout(),
+                    CorfuMsgType.PROPOSED_LAYOUT_RESPONSE));
+        } else {
+            // else the client is somehow ahead of the server.
+            long serverEpoch = serverContext.getServerEpoch();
+            r.sendResponse(ctx, msg, new CorfuPayloadMsg<>(CorfuMsgType.WRONG_EPOCH, serverEpoch));
+            log.warn("handleMessageProposedLayoutRequest: Message Epoch {} ahead of Server epoch {}",
+                    epoch, serverEpoch);
         }
     }
 

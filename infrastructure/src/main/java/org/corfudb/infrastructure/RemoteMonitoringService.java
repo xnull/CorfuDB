@@ -1,14 +1,13 @@
 package org.corfudb.infrastructure;
 
+import static org.corfudb.runtime.FetchLayoutUtil.fetchQuorumLayout;
 import static org.corfudb.util.LambdaUtils.runSansThrow;
 
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -35,7 +34,6 @@ import org.corfudb.runtime.CorfuRuntime;
 import org.corfudb.runtime.exceptions.QuorumUnreachableException;
 import org.corfudb.runtime.exceptions.unrecoverable.UnrecoverableCorfuInterruptedError;
 import org.corfudb.runtime.view.Layout;
-import org.corfudb.runtime.view.QuorumFuturesFactory;
 import org.corfudb.util.NodeLocator;
 import org.corfudb.util.concurrent.SingletonResource;
 
@@ -479,36 +477,6 @@ public class RemoteMonitoringService implements MonitoringService {
 
         } catch (QuorumUnreachableException e) {
             log.error("Error in correcting server epochs: {}", e);
-        }
-    }
-
-    /**
-     * Fetches the updated layout from quorum of layout servers.
-     *
-     * @return quorum agreed layout.
-     * @throws QuorumUnreachableException If unable to receive consensus on layout.
-     */
-    private Layout fetchQuorumLayout(CompletableFuture<Layout>[] completableFutures) {
-
-        QuorumFuturesFactory.CompositeFuture<Layout> quorumFuture = QuorumFuturesFactory
-                .getQuorumFuture(
-                        Comparator.comparing(Layout::asJSONString),
-                        completableFutures);
-        try {
-            return quorumFuture.get();
-        } catch (ExecutionException ee) {
-            if (ee.getCause() instanceof QuorumUnreachableException) {
-                throw (QuorumUnreachableException) ee.getCause();
-            }
-
-            int reachableServers = (int) Arrays.stream(completableFutures)
-                    .filter(booleanCompletableFuture -> !booleanCompletableFuture
-                            .isCompletedExceptionally()).count();
-            throw new QuorumUnreachableException(reachableServers, completableFutures.length);
-        } catch (InterruptedException ie) {
-            log.error("fetchQuorumLayout: Interrupted Exception.");
-            Thread.currentThread().interrupt();
-            throw new UnrecoverableCorfuInterruptedError(ie);
         }
     }
 

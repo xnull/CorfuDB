@@ -26,7 +26,7 @@ public enum CorfuMsgType {
     RESET(2, TypeToken.of(CorfuMsg.class), true),
     SET_EPOCH(3, new TypeToken<CorfuPayloadMsg<Long>>() {}, true),
     ACK(4, TypeToken.of(CorfuMsg.class), true),
-    WRONG_EPOCH(5, new TypeToken<CorfuPayloadMsg<Long>>() {},  true),
+    WRONG_EPOCH(5, new TypeToken<CorfuPayloadMsg<Long>>() {}, true),
     NACK(6, TypeToken.of(CorfuMsg.class)),
     VERSION_REQUEST(7, TypeToken.of(CorfuMsg.class), true),
     VERSION_RESPONSE(8, new TypeToken<JSONPayloadMsg<VersionInfo>>() {}, true),
@@ -79,11 +79,12 @@ public enum CorfuMsgType {
     ERROR_DATA_OUTRANKED(58, TypeToken.of(CorfuMsg.class)),
     ERROR_VALUE_ADOPTED(59,new TypeToken<CorfuPayloadMsg<ReadResponse>>() {}),
 
-
     // EXTRA CODES
     LAYOUT_ALREADY_BOOTSTRAP(60, TypeToken.of(CorfuMsg.class), true),
     LAYOUT_PREPARE_ACK(61, new TypeToken<CorfuPayloadMsg<LayoutPrepareResponse>>(){}, true),
     RESTART(62, TypeToken.of(CorfuMsg.class), true),
+    PROPOSED_LAYOUT_REQUEST(63, new TypeToken<CorfuPayloadMsg<Long>>(){}, true),
+    PROPOSED_LAYOUT_RESPONSE(64, TypeToken.of(LayoutMsg.class), true),
 
     // Management Messages
     MANAGEMENT_BOOTSTRAP_REQUEST(70, new TypeToken<CorfuPayloadMsg<Layout>>(){}, true),

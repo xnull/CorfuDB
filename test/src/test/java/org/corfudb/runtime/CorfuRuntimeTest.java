@@ -2,21 +2,24 @@ package org.corfudb.runtime;
 
 import org.corfudb.infrastructure.TestLayoutBuilder;
 
-import org.corfudb.protocols.wireprotocol.Token;
+import org.corfudb.protocols.wireprotocol.CorfuMsgType;
+import org.corfudb.protocols.wireprotocol.ILogData;
+import org.corfudb.protocols.wireprotocol.TokenResponse;
 import org.corfudb.runtime.clients.LogUnitClient;
 import org.corfudb.runtime.clients.TestRule;
-import org.corfudb.runtime.collections.CorfuTable;
 import org.corfudb.runtime.exceptions.unrecoverable.SystemUnavailableError;
 
 import org.corfudb.runtime.exceptions.WrongEpochException;
 import org.corfudb.runtime.view.AbstractViewTest;
 import org.corfudb.runtime.view.Layout;
+import org.corfudb.runtime.view.LayoutBuilder;
 import org.corfudb.runtime.view.stream.IStreamView;
 import org.corfudb.util.CFUtils;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.time.Duration;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
@@ -29,10 +32,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Created by maithem on 6/21/16.
  */
 public class CorfuRuntimeTest extends AbstractViewTest {
+
     static final int TIME_TO_WAIT_FOR_LAYOUT_IN_SEC = 5;
     static final long TIMEOUT_CORFU_RUNTIME_IN_MS = 500;
-
-
 
     /**
      * Resets the router function to the default function for AbstractViewTest.
@@ -81,7 +83,7 @@ public class CorfuRuntimeTest extends AbstractViewTest {
      * @return The generated layout.
      * @throws Exception
      */
-    private Layout get3NodeLayout() throws Exception {
+    private Layout get3NodeLayout() {
         addServer(SERVERS.PORT_0);
         addServer(SERVERS.PORT_1);
         addServer(SERVERS.PORT_2);
@@ -90,9 +92,9 @@ public class CorfuRuntimeTest extends AbstractViewTest {
                 .addLayoutServer(SERVERS.PORT_0)
                 .addLayoutServer(SERVERS.PORT_1)
                 .addLayoutServer(SERVERS.PORT_2)
+                .addSequencer(SERVERS.PORT_2)
                 .addSequencer(SERVERS.PORT_0)
                 .addSequencer(SERVERS.PORT_1)
-                .addSequencer(SERVERS.PORT_2)
                 .buildSegment()
                 .buildStripe()
                 .addLogUnit(SERVERS.PORT_0)
@@ -129,14 +131,12 @@ public class CorfuRuntimeTest extends AbstractViewTest {
         CorfuRuntime rt = getRuntime(get3NodeLayout()).connect();
 
         // Seal
-        Layout currentLayout = new Layout(rt.getLayoutView().getCurrentLayout());
+        Layout currentLayout = new Layout(rt.getLayoutView().getLayout());
         currentLayout.setEpoch(currentLayout.getEpoch() + 1);
         rt.getLayoutView().getRuntimeLayout(currentLayout).sealMinServerSet();
 
         // Server2 is sealed but will not be able to commit the layout.
-        addClientRule(rt, SERVERS.ENDPOINT_2,
-                new TestRule().always().drop());
-
+        addClientRule(rt, SERVERS.ENDPOINT_2, new TestRule().always().drop());
 
         rt.getLayoutView().updateLayout(currentLayout, 0);
 
@@ -250,6 +250,66 @@ public class CorfuRuntimeTest extends AbstractViewTest {
 
         assertThatThrownBy(() -> sv.append("testPayload".getBytes())).
                 isInstanceOf(SystemUnavailableError.class);
+    }
 
+    @Test
+    public void quorumFetchLayout() throws Exception {
+        CorfuRuntime rt1 = getRuntime(get3NodeLayout()).connect();
+
+        Layout currentLayout = new Layout(rt1.getLayoutView().getLayout());
+        Layout newLayout = new LayoutBuilder(currentLayout)
+                .removeLayoutServer(SERVERS.ENDPOINT_2)
+                .removeSequencerServer(SERVERS.ENDPOINT_2)
+                .removeLogunitServer(SERVERS.ENDPOINT_2)
+                .build();
+        currentLayout.setEpoch(currentLayout.getEpoch() + 1);
+        newLayout.setEpoch(currentLayout.getEpoch());
+
+        addClientRule(rt1, SERVERS.ENDPOINT_2, new TestRule().always().drop());
+        rt1.getRouter(SERVERS.ENDPOINT_2).setTimeoutResponse(1);
+
+        // Seal old layout and wait for quorum {s1, s2}
+        rt1.getLayoutView().getRuntimeLayout(currentLayout).sealMinServerSet();
+        rt1.getLayoutView().updateLayout(newLayout, 0L);
+
+        // Get a new client with the latest layout
+        CorfuRuntime rt2 = getDefaultRuntime();
+        rt2.getLayoutManagementView().reconfigureSequencerServers(currentLayout, newLayout, false);
+
+        UUID streamAid = CorfuRuntime.getStreamID("streamA");
+        IStreamView streamA = rt2.getStreamsView().get(streamAid);
+
+        byte[] payload = "testPayload".getBytes();
+        streamA.append(payload);
+
+        assertThat(getLayoutServer(SERVERS.PORT_2).getCurrentLayout().getEpoch()).isEqualTo(1);
+        assertThat(rt1.getLayoutView().getLayout().getEpoch()).isEqualTo(1);
+
+        // Enforce old client to fetch layout only from s3
+        clearClientRules(rt1);
+        addClientRule(rt1, SERVERS.ENDPOINT_0,
+                new TestRule().matches(msg -> msg.getMsgType().equals(CorfuMsgType.LAYOUT_REQUEST)).drop());
+        addClientRule(rt1, SERVERS.ENDPOINT_0,
+                new TestRule().matches(msg -> msg.getMsgType().equals(CorfuMsgType.PROPOSED_LAYOUT_REQUEST)).drop());
+        rt1.getRouter(SERVERS.ENDPOINT_0).setTimeoutResponse(1);
+        addClientRule(rt1, SERVERS.ENDPOINT_1,
+                new TestRule().matches(msg -> msg.getMsgType().equals(CorfuMsgType.LAYOUT_REQUEST)).drop());
+        addClientRule(rt1, SERVERS.ENDPOINT_1,
+                new TestRule().matches(msg -> msg.getMsgType().equals(CorfuMsgType.PROPOSED_LAYOUT_REQUEST)).drop());
+        rt1.getRouter(SERVERS.ENDPOINT_1).setTimeoutResponse(1);
+
+        rt1.invalidateLayout();
+        assertThat(rt1.getLayoutView().getLayout().getEpoch()).isEqualTo(1);
+
+        TokenResponse token1 = rt2.getSequencerView().query(streamAid);
+        TokenResponse token2 = rt1.getSequencerView().query(streamAid);
+        assertThat(token2.getSequence()).isLessThan(token1.getSequence());
+
+        CompletableFuture<ILogData> future =
+                CompletableFuture.supplyAsync(() -> rt1.getAddressSpaceView().read(token1.getSequence()));
+        CompletableFuture<ILogData> timeoutFuture = CFUtils.within(future,
+                Duration.ofSeconds(TIME_TO_WAIT_FOR_LAYOUT_IN_SEC));
+        assertThatThrownBy(timeoutFuture::get).isInstanceOf(ExecutionException.class)
+                .hasCauseExactlyInstanceOf(TimeoutException.class);
     }
 }
