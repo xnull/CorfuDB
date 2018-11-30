@@ -311,6 +311,7 @@ public class CorfuServer {
                     router,
                     (String) opts.get("--address"),
                     port).channel().closeFuture().syncUninterruptibly();
+            System.out.println("not daemon");
         } catch (Exception e) {
             log.error("CorfuServer: Server exiting due to unrecoverable error: ", e);
             System.exit(EXIT_ERROR_CODE);
@@ -557,6 +558,7 @@ public class CorfuServer {
                         s.shutdown();
                         log.info("CleanShutdown: Cleanly shutdown {}",
                                 s.getClass().getSimpleName());
+                        throw new UnrecoverableCorfuInterruptedError(null);
                     } catch (Exception e) {
                         log.error("CleanShutdown: Failed to cleanly shutdown {}",
                                 s.getClass().getSimpleName(), e);
