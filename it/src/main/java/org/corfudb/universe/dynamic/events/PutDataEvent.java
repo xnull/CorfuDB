@@ -1,11 +1,16 @@
 package org.corfudb.universe.dynamic.events;
 
+import com.spotify.docker.client.DockerClient;
 import lombok.extern.slf4j.Slf4j;
 import org.corfudb.runtime.collections.CorfuTable;
 import org.corfudb.runtime.view.ClusterStatusReport;
+import org.corfudb.universe.dynamic.ContainerStats;
 import org.corfudb.universe.dynamic.Dynamic;
 import org.corfudb.universe.dynamic.PhaseState;
+import org.corfudb.universe.dynamic.PhaseState.ServerPhaseState;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,7 +20,7 @@ import java.util.Map;
  * Created by edilmo on 11/06/18.
  */
 @Slf4j
-public class PutDataEvent implements UniverseEvent {
+public class PutDataEvent extends DataPathEvent {
 
     /**
      * Data generation function to use.
@@ -36,7 +41,11 @@ public class PutDataEvent implements UniverseEvent {
         return this.generator.getTableStreamName();
     }
 
-    public PutDataEvent(CorfuTableDataGenerationFunction<String, String> generator, Dynamic.CorfuClientInstance corfuClientInstance) {
+    public PutDataEvent(CorfuTableDataGenerationFunction<String, String> generator,
+                        Dynamic.CorfuClientInstance corfuClientInstance,
+                        DockerClient docker,
+                        Collection<ServerPhaseState> servers) {
+        super(docker, servers);
         this.generator = generator;
         this.corfuClientInstance = corfuClientInstance;
     }
@@ -91,12 +100,14 @@ public class PutDataEvent implements UniverseEvent {
         double throughput = 0;
         try{
             long ts1 = System.nanoTime();
+            startCollectStats();
             for (Map.Entry<String, String> entry : dataToPut.entrySet()) {
                 table.put(entry.getKey(), entry.getValue());
             }
+            stopCollectStats();
             long ts2 = System.nanoTime();
             double td = (ts2 - ts1);
-            throughput = ((td*1.0)/this.generator.fieldsCount/1000000);
+            throughput = dataToPut.size() / (td * 1.0) * 1000000;
             currentRealState.putDataToTableStream(this.generator.getTableStreamName(), this.generator);
         }catch (Exception ex){
             currentRealState.updateStatusOfTableStream(this.generator.getTableStreamName(),

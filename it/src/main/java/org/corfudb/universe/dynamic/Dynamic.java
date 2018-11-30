@@ -5,15 +5,21 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.corfudb.runtime.view.ClusterStatusReport;
+import org.corfudb.runtime.view.Layout;
 import org.corfudb.universe.dynamic.events.*;
 import org.corfudb.universe.group.cluster.CorfuCluster;
 import org.corfudb.universe.node.client.ClientParams;
 import org.corfudb.universe.node.client.CorfuClient;
 import org.corfudb.universe.node.server.CorfuServer;
+import org.corfudb.util.Sleep;
 
+import java.text.SimpleDateFormat;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
+
+import static org.corfudb.universe.dynamic.PhaseState.*;
 
 /**
  * Simulates the behavior of a corfu cluster and its clients during a period of time given.
@@ -73,6 +79,8 @@ public abstract class Dynamic extends UniverseInitializer {
      */
     protected final LinkedHashMap<String, CorfuServer> corfuServers = new LinkedHashMap<>();
 
+    protected final List<String> containers = new ArrayList<>();
+
     /**
      * Represents the expected state of the universe in a point of time.
      */
@@ -82,6 +90,12 @@ public abstract class Dynamic extends UniverseInitializer {
      * Represents the real state of the universe in a point of time.
      */
     protected final PhaseState realState = new PhaseState();
+
+    public static final String SHEET_USER_ID = "945458289386-dn1ce2g502av9i7l5oldf2ms8nl41hl5.apps.googleusercontent.com";
+
+    public static final String SPREED_SHEET_ID = "10sZf9SOtSEdSIpa8A1gh6URYgbqMqKycGr4NRdAQHys";
+
+    public static String sheetTitle;
 
     /**s
      * Time in milliseconds before update the state.
@@ -141,21 +155,30 @@ public abstract class Dynamic extends UniverseInitializer {
      */
     private void updateRealState() {
         try {
-            Thread.sleep(this.getDelayForStateUpdate());
+            Sleep.MILLISECONDS.sleepUninterruptibly(this.getDelayForStateUpdate());
         }
         catch (Exception ex){
             log.error("Error invoking Thread.sleep." , ex);
         }
+        Layout layout = this.corfuClients.get(0).corfuClient.getLayout();
         ClusterStatusReport clusterStatusReport = this.corfuClients.get(0).corfuClient.
                 getManagementView().getClusterStatus();
         this.realState.setClusterStatus(clusterStatusReport.getClusterStatus());
         Map<String, ClusterStatusReport.NodeStatus> statusMap = clusterStatusReport.getClientServerConnectivityStatusMap();
-        for(PhaseState.ServerPhaseState serverState: this.realState.getServers().values()){
-            if(statusMap.containsKey(serverState.getNodeEndpoint()))
-                serverState.setStatus(statusMap.get(serverState.getNodeEndpoint()));
-            else
+        for(ServerPhaseState serverState : this.realState.getServers().values()) {
+            String endpoint = serverState.getNodeEndpoint();
+            if(statusMap.containsKey(endpoint)) {
+                serverState.setStatus(statusMap.get(endpoint));
+                serverState.setLayoutServer(layout.getLayoutServers().contains(endpoint));
+                serverState.setLogUnitServer(layout.getSegments().stream()
+                        .flatMap(seg -> seg.getAllLogServers().stream())
+                        .anyMatch(s -> s.equals(endpoint)));
+                serverState.setPrimarySequencer(layout.getPrimarySequencer().equals(endpoint));
+            }
+            else {
                 log.error(String.format("Expected server not found in cluster status report. Node Name: %s - Node Endpoint: %s",
-                        serverState.getNodeName(), serverState.getNodeEndpoint()));
+                        serverState.getNodeName(), endpoint));
+            }
         }
     }
 
@@ -186,7 +209,57 @@ public abstract class Dynamic extends UniverseInitializer {
         report.putAll(summaryDesireState);
         log.info(String.format("%s: %s", REPORT_FIELD_DISCARDED_EVENTS, discardedEvents));
         report.put(REPORT_FIELD_DISCARDED_EVENTS, Integer.toString(discardedEvents));
-        //TODO: send report to a spreadsheet
+
+        WriteReportToSheet();
+    }
+
+    private void WriteReportToSheet() {
+        List<ServerPhaseState> servers = new ArrayList<>(realState.getServers().values());
+        servers.sort(Comparator.comparing(ServerPhaseState::getHostName));
+        List<ClientPhaseState> clients = new ArrayList<>(realState.getClients().values());
+        clients.sort(Comparator.comparing(ClientPhaseState::getClientName));
+
+        List<Object> columns = new ArrayList<>();
+        columns.add(realState.getClusterStatus().name());
+
+        columns.addAll(clients.stream()
+                .map(c -> new Object[]{c.getGetThroughput(), c.getPutThroughput()})
+                .flatMap(Arrays::stream)
+                .collect(Collectors.toList()));
+
+        columns.addAll(servers
+                .stream()
+                .map(s -> new Object[]{s.getStatus().name(), s.isLayoutServer(),
+                        s.isLogUnitServer(), s.isPrimarySequencer(), s.getServerStats().cpuUsage})
+                .flatMap(Arrays::stream)
+                .collect(Collectors.toList()));
+
+        Sheets.append(Arrays.asList(columns), sheetTitle);
+    }
+
+    private void createSheet() {
+        SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss");
+        Date date = new Date();
+        sheetTitle = "Longevity-v1-" + formatter.format(date);
+        Sheets.create(sheetTitle);
+
+        List<Object> columns = new ArrayList<>();
+        columns.add("cluster_status");
+
+        for (int i = 1; i <= DEFAULT_AMOUNT_OF_CORFU_CLIENTS; i++) {
+            columns.add("client" + i + "_get_throughput");
+            columns.add("client" + i + "_put_throughput");
+        }
+
+        for (int i = 1; i <= numNodes; i++) {
+            columns.add("server" + i + "_status");
+            columns.add("server" + i + "_layout");
+            columns.add("server" + i + "_logunit");
+            columns.add("server" + i + "_primary_sequencer");
+            columns.add("server" + i + "_cpu");
+        }
+
+        Sheets.append(Arrays.asList(columns), sheetTitle);
     }
 
     /**
@@ -198,21 +271,23 @@ public abstract class Dynamic extends UniverseInitializer {
             this.numNodes = fixture.getNumNodes();
             this.clientFixture = fixture.getClient();
             this.corfuCluster = universe.getGroup(fixture.getCorfuCluster().getName());
+            createSheet();
+
             for(int i = 0; i < DEFAULT_AMOUNT_OF_CORFU_CLIENTS; i++){
                 CorfuClient corfuClient = corfuCluster.getLocalCorfuClient();
                 String clientName = corfuClient.getParams().getName() + i;
                 CorfuClientInstance corfuClientInstance = new CorfuClientInstance(i, clientName, corfuClient);
                 this.corfuClients.add(corfuClientInstance);
-                PhaseState.ClientPhaseState desireClientState = new PhaseState.ClientPhaseState(clientName);
+                ClientPhaseState desireClientState = new ClientPhaseState(clientName);
                 this.desireState.getClients().put(clientName, desireClientState);
-                PhaseState.ClientPhaseState realClientState = new PhaseState.ClientPhaseState(clientName);
+                ClientPhaseState realClientState = new ClientPhaseState(clientName);
                 this.realState.getClients().put(clientName, realClientState);
                 for(CorfuTableDataGenerationFunction corfuTableDataGenerator: corfuClientInstance.corfuTables){
-                    PhaseState.TableStreamPhaseState desireTableState =
-                            new PhaseState.TableStreamPhaseState(corfuTableDataGenerator.getTableStreamName());
+                    TableStreamPhaseState desireTableState =
+                            new TableStreamPhaseState(corfuTableDataGenerator.getTableStreamName());
                     this.desireState.getData().put(desireTableState.getTableStreamName(), desireTableState);
-                    PhaseState.TableStreamPhaseState realTableState =
-                            new PhaseState.TableStreamPhaseState(corfuTableDataGenerator.getTableStreamName());
+                    TableStreamPhaseState realTableState =
+                            new TableStreamPhaseState(corfuTableDataGenerator.getTableStreamName());
                     this.realState.getData().put(desireTableState.getTableStreamName(), realTableState);
                 }
             }
@@ -220,9 +295,12 @@ public abstract class Dynamic extends UniverseInitializer {
                 String nodeName = "node" + (9000 + i);
                 CorfuServer nodeServer = (CorfuServer)corfuCluster.getNode(nodeName);
                 this.corfuServers.put(nodeName, nodeServer);
-                PhaseState.ServerPhaseState desireServerState = new PhaseState.ServerPhaseState(nodeName, nodeServer.getEndpoint());
+                this.containers.add(nodeServer.getParams().getName());
+                ServerPhaseState desireServerState =
+                        new ServerPhaseState(nodeName, nodeServer.getEndpoint(), nodeServer.getParams().getName());
                 this.desireState.getServers().put(nodeName, desireServerState);
-                PhaseState.ServerPhaseState realServerState = new PhaseState.ServerPhaseState(nodeName, nodeServer.getEndpoint());
+                ServerPhaseState realServerState =
+                        new ServerPhaseState(nodeName, nodeServer.getEndpoint(), nodeServer.getParams().getName());
                 this.realState.getServers().put(nodeName, realServerState);
             }
             int discardedEvents = 0;
@@ -233,7 +311,7 @@ public abstract class Dynamic extends UniverseInitializer {
                     this.reportStateDifference(compositeEvent, discardedEvents);
                     discardedEvents = 0;
                     try {
-                        Thread.sleep(this.getIntervalBetweenEvents());
+                        Sleep.MILLISECONDS.sleepUninterruptibly(this.getIntervalBetweenEvents());
                     }
                     catch (Exception ex){
                         log.error("Error invoking Thread.sleep." , ex);
@@ -282,7 +360,7 @@ public abstract class Dynamic extends UniverseInitializer {
         /**
          * Amount of corfu tables handle for each client in the universe.
          */
-        private static final int DEFAULT_AMOUNT_OF_FIELDS_PER_CORFU_TABLE = 50;
+        private static final int DEFAULT_AMOUNT_OF_FIELDS_PER_CORFU_TABLE = 500;
 
         /**
          * Integer id that is used as a simple seed to make each data generation function different
@@ -369,8 +447,11 @@ public abstract class Dynamic extends UniverseInitializer {
          * @return
          */
         protected PutDataEvent generatePutDataEvent() {
-            PutDataEvent event = new PutDataEvent(this.corfuClients.get(clientIndexForPutData).corfuTables.get(tableIndexForPutData),
-                    this.corfuClients.get(clientIndexForPutData));
+            PutDataEvent event = new PutDataEvent(
+                    this.corfuClients.get(clientIndexForPutData).corfuTables.get(tableIndexForPutData),
+                    this.corfuClients.get(clientIndexForPutData),
+                    docker,
+                    this.realState.getServers().values());
             tableIndexForPutData++;
             if(tableIndexForPutData >= this.corfuClients.get(clientIndexForPutData).corfuTables.size()){
                 tableIndexForPutData = 0;
@@ -397,8 +478,11 @@ public abstract class Dynamic extends UniverseInitializer {
          * @return
          */
         protected GetDataEvent generateGetDataEvent() {
-            GetDataEvent event = new GetDataEvent(this.corfuClients.get(clientIndexForGetData).corfuTables.get(tableIndexForGetData),
-                    this.corfuClients.get(clientIndexForGetData));
+            GetDataEvent event = new GetDataEvent(
+                    this.corfuClients.get(clientIndexForGetData).corfuTables.get(tableIndexForGetData),
+                    this.corfuClients.get(clientIndexForGetData),
+                    docker,
+                    this.realState.getServers().values());
             tableIndexForGetData++;
             if(tableIndexForGetData >= this.corfuClients.get(clientIndexForGetData).corfuTables.size()){
                 tableIndexForGetData = 0;

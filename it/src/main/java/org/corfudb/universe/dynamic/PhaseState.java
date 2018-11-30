@@ -2,6 +2,7 @@ package org.corfudb.universe.dynamic;
 
 import lombok.Data;
 import lombok.Getter;
+import lombok.ToString;
 import org.corfudb.runtime.view.ClusterStatusReport;
 import org.corfudb.universe.dynamic.events.CorfuTableDataGenerationFunction;
 
@@ -238,6 +239,7 @@ public class PhaseState implements Cloneable {
      * Represents the state of a node server in a point of time.
      */
     @Data
+    @ToString
     public static class ServerPhaseState implements Cloneable {
 
         /**
@@ -250,6 +252,17 @@ public class PhaseState implements Cloneable {
          */
         private final String nodeEndpoint;
 
+        private final String hostName;
+
+        private boolean isLayoutServer;
+
+        private boolean isLogUnitServer;
+
+        private boolean isPrimarySequencer;
+
+        private long collectCount;
+
+        private ContainerStats serverStats = new ContainerStats();
 
         /**
          * Connectivity to the node.
@@ -257,9 +270,15 @@ public class PhaseState implements Cloneable {
         private ClusterStatusReport.NodeStatus status = ClusterStatusReport.NodeStatus.UP;
 
         public Object clone(){
-            ServerPhaseState clone = new ServerPhaseState(this.nodeName, this.nodeEndpoint);
+            ServerPhaseState clone = new ServerPhaseState(this.nodeName, this.nodeEndpoint, this.hostName);
             clone.status = this.status;
             return clone;
+        }
+
+        public void updateStats(long cpuUsage) {
+            double updatedCpuUsage = 1.0 * (serverStats.cpuUsage * collectCount + cpuUsage) / (collectCount + 1);
+            collectCount++;
+            serverStats.updateCpuUsage((float) updatedCpuUsage);
         }
     }
 

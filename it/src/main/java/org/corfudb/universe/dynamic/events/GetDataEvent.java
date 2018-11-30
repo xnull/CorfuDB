@@ -1,12 +1,17 @@
 package org.corfudb.universe.dynamic.events;
 
+import com.spotify.docker.client.DockerClient;
 import lombok.extern.slf4j.Slf4j;
 import org.corfudb.runtime.collections.CorfuTable;
 import org.corfudb.runtime.view.ClusterStatusReport;
+import org.corfudb.universe.dynamic.ContainerStats;
 import org.corfudb.universe.dynamic.Dynamic;
 import org.corfudb.universe.dynamic.PhaseState;
+import org.corfudb.universe.dynamic.PhaseState.ServerPhaseState;
 
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -16,7 +21,7 @@ import java.util.Map;
  * Created by edilmo on 11/06/18.
  */
 @Slf4j
-public class GetDataEvent implements UniverseEvent {
+public class GetDataEvent extends DataPathEvent {
 
     /**
      * Snapshot of the data generation function used.
@@ -37,7 +42,11 @@ public class GetDataEvent implements UniverseEvent {
         return this.generatorSnapshot.getTableStreamName();
     }
 
-    public GetDataEvent(CorfuTableDataGenerationFunction<String, String> generator, Dynamic.CorfuClientInstance corfuClientInstance) {
+    public GetDataEvent(CorfuTableDataGenerationFunction<String, String> generator,
+                        Dynamic.CorfuClientInstance corfuClientInstance,
+                        DockerClient docker,
+                        Collection<ServerPhaseState> servers) {
+        super(docker, servers);
         try{
             this.generatorSnapshot = generator.getSnapshot();
         }catch (CloneNotSupportedException cne){
@@ -93,12 +102,14 @@ public class GetDataEvent implements UniverseEvent {
         double throughput = 0;
         try{
             long ts1 = System.nanoTime();
+            startCollectStats();
             for (String fieldName : dataToRead.keySet()) {
                 tableDataRead.put(fieldName, table.get(fieldName));
             }
+            stopCollectStats();
             long ts2 = System.nanoTime();
             double td = (ts2 - ts1);
-            throughput = ((td*1.0)/this.generatorSnapshot.fieldsCount/1000000);
+            throughput = dataToRead.size() / (td * 1.0) * 1000000;
         }catch (Exception ex){
             log.error(String.format("Unexpected error while getting Data for %s generatorSnapshot",
                     this.generatorSnapshot.getName()),

@@ -46,7 +46,7 @@ import static com.spotify.docker.client.DockerClient.LogsParam;
  */
 @Slf4j
 public class DockerCorfuServer extends AbstractCorfuServer<CorfuServerParams, UniverseParams> {
-    private static final String IMAGE_NAME = "corfu-server:" + getAppVersion();
+    private static final String IMAGE_NAME = "corfu-server:" + "0.2.2-SNAPSHOT";
     private static final String ALL_NETWORK_INTERFACES = "0.0.0.0";
 
     @NonNull
