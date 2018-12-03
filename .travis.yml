@@ -3,12 +3,6 @@ sudo: required
 dist: trusty
 jdk: oraclejdk8
 
-stages:
-- name: test
-  if: type = pull_request
-- name: code_quality
-  if: branch = master AND type != pull_request
-
 before_cache:
 - rm -rf $HOME/.m2/repository/org/corfudb
 
@@ -23,44 +17,6 @@ before_install: |
     -q
 
 install: true
-
-jobs:
-  include:
-  - stage: test
-    name: Unit Tests
-    script:
-    - ./mvnw -pl :test clean test -T 1C -am -Dtest.travisBuild=true
-  - script:
-    - ./mvnw -pl :test clean verify -T 1C -am -Pit -DskipTests -Dtest.travisBuild=true
-    name: Integration Tests
-  - script:
-    - ./mvnw -pl :universe clean verify -T 1C -am -Pit
-    name: Testing Framework Tests
-  - stage: code_quality
-    name: Code Quality
-    script:
-    - |
-      ./mvnw verify -Pit sonar:sonar \
-      -Dtest.travisBuild=true \
-      -Dsonar.host.url=https://sonarqube.com \
-      -Dsonar.github.pullRequest=$TRAVIS_PULL_REQUEST \
-      -Dsonar.github.repository=$TRAVIS_REPO_SLUG \
-      -Dsonar.github.oauth=$SONAR_GITHUB_TOKEN \
-      -Dsonar.organization=corfudb \
-      -Dsonar.login=$SONAR_TOKEN \
-      -Dmaven.javadoc.skip=true
-    - bash <(curl -s https://codecov.io/bash)
-    - .travis_scripts/javadocs.sh
-
-notifications:
-  email:
-  - corfudb-dev@googlegroups.com
-  webhooks:
-    urls:
-    - https://webhooks.gitter.im/e/e26458f01e3586e3c140
-    on_success: always
-    on_failure: always
-    on_start: true
 
 addons:
   apt:
