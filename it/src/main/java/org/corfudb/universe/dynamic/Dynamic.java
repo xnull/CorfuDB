@@ -10,6 +10,7 @@ import org.corfudb.universe.group.cluster.CorfuCluster;
 import org.corfudb.universe.node.client.ClientParams;
 import org.corfudb.universe.node.client.CorfuClient;
 import org.corfudb.universe.node.server.CorfuServer;
+import org.corfudb.util.Sleep;
 
 import java.time.Duration;
 import java.util.*;
@@ -141,7 +142,7 @@ public abstract class Dynamic extends UniverseInitializer {
      */
     private void updateRealState() {
         try {
-            Thread.sleep(this.getDelayForStateUpdate());
+            Sleep.MILLISECONDS.sleepUninterruptibly(this.getDelayForStateUpdate());
         }
         catch (Exception ex){
             log.error("Error invoking Thread.sleep." , ex);
@@ -233,7 +234,7 @@ public abstract class Dynamic extends UniverseInitializer {
                     this.reportStateDifference(compositeEvent, discardedEvents);
                     discardedEvents = 0;
                     try {
-                        Thread.sleep(this.getIntervalBetweenEvents());
+                        Sleep.MILLISECONDS.sleepUninterruptibly(this.getIntervalBetweenEvents());
                     }
                     catch (Exception ex){
                         log.error("Error invoking Thread.sleep." , ex);
