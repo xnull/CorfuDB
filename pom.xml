@@ -50,7 +50,7 @@
     <scm>
         <connection>scm:git:git://github.com/CorfuDB/CorfuDB.git</connection>
         <developerConnection>scm:git:git://github.com:CorfuDB/CorfuDB.git</developerConnection>
-        <url>http://github.com/CorfuDB/CorfuDB</url>
+        <url>https://github.com/CorfuDB/CorfuDB</url>
     </scm>
 
     <licenses>
@@ -237,6 +237,13 @@
         </pluginManagement>
 
         <plugins>
+            <plugin>
+                <artifactId>maven-scm-plugin</artifactId>
+                <version>1.11.1</version>
+                <configuration>
+
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.sonarsource.scanner.maven</groupId>
                 <artifactId>sonar-maven-plugin</artifactId>
