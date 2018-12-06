@@ -4,7 +4,7 @@
 
     <groupId>org.corfudb</groupId>
     <artifactId>corfu</artifactId>
-    <version>0.2.555</version>
+    <version>0.2.666</version>
 
     <modules>
         <module>infrastructure</module>
@@ -49,7 +49,7 @@
 
     <scm>
         <connection>scm:git:git://github.com/CorfuDB/CorfuDB.git</connection>
-        <developerConnection>scm:git:git://github.com:CorfuDB/CorfuDB.git</developerConnection>
+        <developerConnection>scm:git:git://github.com/CorfuDB/CorfuDB.git</developerConnection>
         <url>https://github.com/CorfuDB/CorfuDB</url>
     </scm>
 
