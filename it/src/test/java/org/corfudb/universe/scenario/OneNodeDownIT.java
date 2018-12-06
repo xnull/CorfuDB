@@ -9,6 +9,7 @@ import org.corfudb.universe.group.cluster.CorfuCluster;
 import org.corfudb.universe.node.client.CorfuClient;
 import org.corfudb.universe.node.server.CorfuServer;
 import org.corfudb.util.Sleep;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.time.Duration;
@@ -30,6 +31,7 @@ public class OneNodeDownIT extends GenericIntegrationTest {
      * 4) Recover cluster by restarting the stopped node
      * 5) Verify layout, cluster status and data path again
      */
+    @Ignore
     @Test(timeout = 300000)
     public void oneNodeDownTest() {
 
