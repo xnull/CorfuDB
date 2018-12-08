@@ -53,6 +53,7 @@ public class NodeDownAndLinkFailureIT extends GenericIntegrationTest {
 
                 server2.stop(Duration.ofSeconds(10));
                 waitForUnresponsiveServersChange(size -> size == 1, corfuClient);
+                System.out.println(11111);
 
                 assertThat(corfuClient.getLayout().getUnresponsiveServers()).containsExactly(server2.getEndpoint());
 
@@ -64,10 +65,12 @@ public class NodeDownAndLinkFailureIT extends GenericIntegrationTest {
 
                 // Restart the stopped node, server0 and server1 still partitioned,
                 // wait for the one with larger endpoint be marked as unresponsive.
+                System.out.println(22222);
                 server2.start();
                 String serverToKick = Collections.max(Arrays.asList(server0.getEndpoint(), server1.getEndpoint()));
                 waitForLayoutChange(layout -> layout.getUnresponsiveServers().equals(
                         Collections.singletonList(serverToKick)), corfuClient);
+                System.out.println(33333);
 
                 assertThat(corfuClient.getLayout().getUnresponsiveServers()).containsExactly(serverToKick);
 
