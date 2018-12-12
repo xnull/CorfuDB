@@ -1,22 +1,34 @@
 package org.corfudb.infrastructure.log;
 
-import lombok.extern.slf4j.Slf4j;
-import org.corfudb.AbstractCorfuTest;
-import org.corfudb.infrastructure.ServerContext;
-import org.junit.Test;
-
-import java.time.Duration;
-import java.util.concurrent.TimeUnit;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 
+import com.codahale.metrics.MetricRegistry;
+import lombok.extern.slf4j.Slf4j;
+import org.corfudb.AbstractCorfuTest;
+import org.corfudb.infrastructure.ServerContext;
+import org.corfudb.util.MetricsUtils;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
+import java.util.concurrent.TimeUnit;
+
 @Slf4j
 public class StreamLogCompactionTest extends AbstractCorfuTest {
 
+    private static MetricRegistry metricRegistry;
+
+    @BeforeClass
+    public static void setUpMetrics() {
+        metricRegistry = ServerContext.getMetrics();
+        if (!MetricsUtils.isMetricsCollectionEnabled()) {
+            MetricsUtils.metricsReportingSetup(metricRegistry);
+        }
+    }
+
     /**
-     * Test that task catch all possible exceptions and doesn't break scheduled executor
+     * Test that task catches all possible exceptions and doesn't break scheduled executor
      *
      * @throws InterruptedException thread sleep
      */
@@ -31,24 +43,26 @@ public class StreamLogCompactionTest extends AbstractCorfuTest {
         StreamLog streamLog = mock(StreamLog.class);
         doThrow(new RuntimeException("err")).when(streamLog).compact();
 
-        StreamLogCompaction compaction = new StreamLogCompaction(
-                streamLog, initialDelay, period, TimeUnit.MILLISECONDS, Duration.ofSeconds(1)
-        );
+        final long initialCompactionCounter = getCompactionCounter();
+        StreamLogCompaction compaction = new StreamLogCompaction(streamLog,
+                                                                 initialDelay,
+                                                                 period,
+                                                                 TimeUnit.MILLISECONDS,
+                                                                 PARAMETERS.TIMEOUT_VERY_SHORT);
 
-        final long expectedGcCounter = 2;
-        while(getGcCounter() < expectedGcCounter){
+        final long expectedCompactionCounter = 2 + initialCompactionCounter;
+        while(getCompactionCounter() < expectedCompactionCounter){
             TimeUnit.MILLISECONDS.sleep(timeout);
         }
 
         compaction.shutdown();
 
-        assertThat(getGcCounter()).isGreaterThanOrEqualTo(expectedGcCounter);
+        assertThat(getCompactionCounter()).isGreaterThanOrEqualTo(expectedCompactionCounter);
     }
 
-    private long getGcCounter() {
-        return ServerContext.getMetrics()
-                    .getCounters()
-                    .get(StreamLogCompaction.STREAM_COMPACT_METRIC)
-                    .getCount();
+    private long getCompactionCounter() {
+        return metricRegistry
+                .timer(StreamLogCompaction.STREAM_COMPACT_METRIC)
+                .getCount();
     }
 }
